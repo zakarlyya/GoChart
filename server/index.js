@@ -157,30 +157,341 @@ app.get('/api/trips', authenticateToken, (req, res) => {
 });
 
 app.post('/api/trips', authenticateToken, (req, res) => {
-  const {
-    plane_id,
+  console.log('Creating new trip:', req.body);
+
+  const { 
+    departure_airport, 
+    arrival_airport, 
+    plane_id, 
+    pilot_id,
+    departure_time 
+  } = req.body;
+  
+  if (!departure_airport || !arrival_airport || !plane_id || !departure_time) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  // Convert plane_id and pilot_id to numbers
+  const parsedPlaneId = Number(plane_id);
+  const parsedPilotId = pilot_id ? Number(pilot_id) : null;
+
+  // Validate the date format
+  let departureDate;
+  try {
+    departureDate = new Date(departure_time);
+    if (isNaN(departureDate.getTime())) {
+      throw new Error('Invalid date');
+    }
+  } catch (error) {
+    console.error('Invalid departure time:', departure_time);
+    return res.status(400).json({ error: 'Invalid departure time format' });
+  }
+
+  // Estimate arrival time (2 hours after departure)
+  const estimatedArrival = new Date(departureDate.getTime() + (2 * 60 * 60 * 1000));
+
+  console.log('Inserting trip with values:', {
+    userId: req.user.id,
+    parsedPlaneId,
+    parsedPilotId,
     departure_airport,
     arrival_airport,
     departure_time,
-    estimated_arrival_time,
-    estimated_fuel_cost,
-    estimated_total_cost
-  } = req.body;
+    estimatedArrival: estimatedArrival.toISOString()
+  });
 
   db.run(
     `INSERT INTO trips (
-      user_id, plane_id, departure_airport, arrival_airport,
-      departure_time, estimated_arrival_time,
-      estimated_fuel_cost, estimated_total_cost
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      user_id, plane_id, pilot_id, departure_airport, arrival_airport, 
+      departure_time, estimated_arrival_time, status, estimated_total_cost
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', 1000)`,
     [
-      req.user.id, plane_id, departure_airport, arrival_airport,
-      departure_time, estimated_arrival_time,
-      estimated_fuel_cost, estimated_total_cost
+      req.user.id,
+      parsedPlaneId,
+      parsedPilotId,
+      departure_airport,
+      arrival_airport,
+      departureDate.toISOString(),
+      estimatedArrival.toISOString()
     ],
     function(err) {
-      if (err) return res.status(500).json({ error: 'Error creating trip' });
-      res.json({ id: this.lastID });
+      if (err) {
+        console.error('Error adding trip:', err);
+        return res.status(500).json({ error: `Error adding trip: ${err.message}` });
+      }
+      
+      db.get('SELECT * FROM trips WHERE id = ?', [this.lastID], (err, row) => {
+        if (err) {
+          console.error('Error fetching new trip:', err);
+          return res.status(500).json({ error: `Error fetching new trip: ${err.message}` });
+        }
+        console.log('Trip created successfully:', row);
+        res.status(201).json(row);
+      });
+    }
+  );
+});
+
+// Update plane
+app.put('/api/planes/:id', authenticateToken, (req, res) => {
+  const { tail_number, model, manufacturer } = req.body;
+  const planeId = req.params.id;
+
+  // First check if the plane belongs to the user
+  db.get(
+    'SELECT * FROM planes WHERE id = ? AND user_id = ?',
+    [planeId, req.user.id],
+    (err, plane) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      if (!plane) return res.status(404).json({ error: 'Plane not found' });
+
+      // Update the plane
+      db.run(
+        `UPDATE planes 
+         SET tail_number = ?, model = ?, manufacturer = ?
+         WHERE id = ? AND user_id = ?`,
+        [tail_number, model, manufacturer, planeId, req.user.id],
+        (err) => {
+          if (err) {
+            if (err.message.includes('UNIQUE constraint failed')) {
+              return res.status(400).json({ error: 'Tail number already exists' });
+            }
+            return res.status(500).json({ error: 'Error updating plane' });
+          }
+          res.json({ message: 'Plane updated successfully' });
+        }
+      );
+    }
+  );
+});
+
+// Delete plane
+app.delete('/api/planes/:id', authenticateToken, (req, res) => {
+  const planeId = req.params.id;
+
+  // First check if the plane belongs to the user
+  db.get(
+    'SELECT * FROM planes WHERE id = ? AND user_id = ?',
+    [planeId, req.user.id],
+    (err, plane) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      if (!plane) return res.status(404).json({ error: 'Plane not found' });
+
+      // Delete the plane
+      db.run(
+        'DELETE FROM planes WHERE id = ? AND user_id = ?',
+        [planeId, req.user.id],
+        (err) => {
+          if (err) return res.status(500).json({ error: 'Error deleting plane' });
+          res.json({ message: 'Plane deleted successfully' });
+        }
+      );
+    }
+  );
+});
+
+// Update trip
+app.put('/api/trips/:id', authenticateToken, (req, res) => {
+  console.log('Updating trip:', {
+    tripId: req.params.id,
+    body: req.body,
+    userId: req.user.id
+  });
+
+  const { 
+    status, 
+    pilot_id,
+    departure_time, 
+    estimated_arrival_time,
+    actual_departure_time,
+    actual_arrival_time 
+  } = req.body;
+
+  if (!status) {
+    return res.status(400).json({ error: 'Status is required' });
+  }
+
+  // Convert pilot_id to number or null
+  const parsedPilotId = pilot_id ? Number(pilot_id) : null;
+
+  // Validate and format dates
+  const formatDate = (dateStr) => {
+    if (!dateStr) return null;
+    try {
+      const date = new Date(dateStr);
+      if (isNaN(date.getTime())) {
+        throw new Error('Invalid date');
+      }
+      return date.toISOString();
+    } catch (error) {
+      console.error('Invalid date:', dateStr);
+      return null;
+    }
+  };
+
+  const formattedDates = {
+    departure_time: formatDate(departure_time),
+    estimated_arrival_time: formatDate(estimated_arrival_time),
+    actual_departure_time: formatDate(actual_departure_time),
+    actual_arrival_time: formatDate(actual_arrival_time)
+  };
+
+  // Log the values being used in the update
+  console.log('Update values:', {
+    status,
+    parsedPilotId,
+    ...formattedDates
+  });
+
+  db.run(
+    `UPDATE trips 
+     SET status = ?, pilot_id = ?, departure_time = ?, estimated_arrival_time = ?,
+         actual_departure_time = ?, actual_arrival_time = ?
+     WHERE id = ? AND user_id = ?`,
+    [
+      status, 
+      parsedPilotId,
+      formattedDates.departure_time,
+      formattedDates.estimated_arrival_time,
+      formattedDates.actual_departure_time,
+      formattedDates.actual_arrival_time,
+      req.params.id, 
+      req.user.id
+    ],
+    (err) => {
+      if (err) {
+        console.error('Error updating trip:', err);
+        return res.status(500).json({ error: `Error updating trip: ${err.message}` });
+      }
+      
+      db.get('SELECT * FROM trips WHERE id = ? AND user_id = ?', [req.params.id, req.user.id], (err, row) => {
+        if (err) {
+          console.error('Error fetching updated trip:', err);
+          return res.status(500).json({ error: `Error fetching updated trip: ${err.message}` });
+        }
+        if (!row) {
+          return res.status(404).json({ error: 'Trip not found' });
+        }
+        console.log('Trip updated successfully:', row);
+        res.json(row);
+      });
+    }
+  );
+});
+
+// Delete trip
+app.delete('/api/trips/:id', authenticateToken, (req, res) => {
+  const tripId = req.params.id;
+  
+  // First check if the trip belongs to the user and is scheduled
+  db.get(
+    'SELECT * FROM trips WHERE id = ? AND user_id = ? AND status = "scheduled"',
+    [tripId, req.user.id],
+    (err, trip) => {
+      if (err) return res.status(500).json({ error: 'Database error' });
+      if (!trip) return res.status(404).json({ error: 'Trip not found or cannot be deleted' });
+
+      // Delete the trip
+      db.run(
+        'DELETE FROM trips WHERE id = ? AND user_id = ?',
+        [tripId, req.user.id],
+        (err) => {
+          if (err) return res.status(500).json({ error: 'Error deleting trip' });
+          res.json({ message: 'Trip deleted successfully' });
+        }
+      );
+    }
+  );
+});
+
+// Get all pilots for a user
+app.get('/api/pilots', authenticateToken, (req, res) => {
+  db.all(
+    'SELECT * FROM pilots WHERE user_id = ? ORDER BY name',
+    [req.user.id],
+    (err, rows) => {
+      if (err) {
+        console.error('Error fetching pilots:', err);
+        return res.status(500).json({ error: 'Error fetching pilots' });
+      }
+      res.json(rows);
+    }
+  );
+});
+
+// Add a new pilot
+app.post('/api/pilots', authenticateToken, (req, res) => {
+  const { name, license_number, rating, total_hours, contact_number, email } = req.body;
+  
+  if (!name || !license_number) {
+    return res.status(400).json({ error: 'Name and license number are required' });
+  }
+
+  db.run(
+    `INSERT INTO pilots (user_id, name, license_number, rating, total_hours, contact_number, email)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.id, name, license_number, rating, total_hours, contact_number, email],
+    function(err) {
+      if (err) {
+        console.error('Error adding pilot:', err);
+        return res.status(500).json({ error: 'Error adding pilot' });
+      }
+      
+      db.get('SELECT * FROM pilots WHERE id = ?', [this.lastID], (err, row) => {
+        if (err) {
+          console.error('Error fetching new pilot:', err);
+          return res.status(500).json({ error: 'Error fetching new pilot' });
+        }
+        res.status(201).json(row);
+      });
+    }
+  );
+});
+
+// Update a pilot
+app.put('/api/pilots/:id', authenticateToken, (req, res) => {
+  const { name, license_number, rating, total_hours, contact_number, email } = req.body;
+  
+  if (!name || !license_number) {
+    return res.status(400).json({ error: 'Name and license number are required' });
+  }
+
+  db.run(
+    `UPDATE pilots 
+     SET name = ?, license_number = ?, rating = ?, total_hours = ?, contact_number = ?, email = ?
+     WHERE id = ? AND user_id = ?`,
+    [name, license_number, rating, total_hours, contact_number, email, req.params.id, req.user.id],
+    (err) => {
+      if (err) {
+        console.error('Error updating pilot:', err);
+        return res.status(500).json({ error: 'Error updating pilot' });
+      }
+      
+      db.get('SELECT * FROM pilots WHERE id = ? AND user_id = ?', [req.params.id, req.user.id], (err, row) => {
+        if (err) {
+          console.error('Error fetching updated pilot:', err);
+          return res.status(500).json({ error: 'Error fetching updated pilot' });
+        }
+        if (!row) {
+          return res.status(404).json({ error: 'Pilot not found' });
+        }
+        res.json(row);
+      });
+    }
+  );
+});
+
+// Delete a pilot
+app.delete('/api/pilots/:id', authenticateToken, (req, res) => {
+  db.run(
+    'DELETE FROM pilots WHERE id = ? AND user_id = ?',
+    [req.params.id, req.user.id],
+    (err) => {
+      if (err) {
+        console.error('Error deleting pilot:', err);
+        return res.status(500).json({ error: 'Error deleting pilot' });
+      }
+      res.status(204).send();
     }
   );
 });
