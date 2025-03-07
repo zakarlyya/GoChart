@@ -85,10 +85,11 @@ const getWebGLErrorMessage = () => {
 
 // Loading component
 const Loading = ({ message }: { message: string }) => (
-  <div className="h-screen flex items-center justify-center bg-gray-900">
-    <div className="text-center">
-      <h2 className="text-xl font-semibold text-gray-200">{message}</h2>
-      <p className="text-gray-400 mt-2">Please wait while we process your request</p>
+  <div className="absolute inset-0 bg-gray-900 bg-opacity-80 flex items-center justify-center z-50">
+    <div className="text-center p-6 bg-gray-800 rounded-lg shadow-lg">
+      <div className="animate-spin w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+      <h2 className="text-xl font-semibold text-white mb-2">{message}</h2>
+      <p className="text-gray-300">Please wait while we process your request</p>
     </div>
   </div>
 );
@@ -294,19 +295,32 @@ const EditPlaneModal = ({
 };
 
 // Trip Card component
-const TripCard = ({ trip, onClick, pilots, planes }: { 
+const TripCard = ({ 
+  trip, 
+  onClick, 
+  pilots, 
+  planes, 
+  isHovered,
+  onHover 
+}: { 
   trip: Trip; 
-  onClick: () => void;
-  pilots: Pilot[];
-  planes: Plane[];
+  onClick: () => void; 
+  pilots: Pilot[]; 
+  planes: Plane[]; 
+  isHovered?: boolean;
+  onHover: (tripId: number | null) => void;
 }) => {
   const pilot = pilots.find(p => p.id === trip.pilot_id);
   const plane = planes.find(p => p.id === trip.plane_id);
   
   return (
     <div 
-      className="p-3 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-colors"
+      className={`p-3 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-colors ${
+        isHovered ? 'ring-2 ring-blue-500' : ''
+      }`}
       onClick={onClick}
+      onMouseEnter={() => onHover(trip.id)}
+      onMouseLeave={() => onHover(null)}
     >
       <p className="font-medium text-white">
         {trip.departure_airport} → {trip.arrival_airport}
@@ -534,11 +548,13 @@ const TripDetailsModal = ({
 const ConfirmationModal = ({
   title,
   message,
+  errorMessage,
   onConfirm,
   onCancel
 }: {
   title: string;
   message: string;
+  errorMessage?: string;
   onConfirm: () => void;
   onCancel: () => void;
 }) => (
@@ -546,6 +562,11 @@ const ConfirmationModal = ({
     <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
       <h3 className="text-xl font-bold mb-2 text-white">{title}</h3>
       <p className="text-gray-300 mb-6">{message}</p>
+      {errorMessage && (
+        <div className="mb-4 p-3 bg-red-900/50 border-l-4 border-red-500 text-red-200">
+          {errorMessage}
+        </div>
+      )}
       <div className="flex justify-end space-x-2">
         <button
           onClick={onCancel}
@@ -944,6 +965,46 @@ const AirportInput = ({
   );
 };
 
+// Add these new interfaces after the existing interfaces
+interface MapTrip extends Trip {
+  coordinates: [number, number][];
+  sourceId: string;
+  layerId: string;
+}
+
+interface MapAirport {
+  icao: string;
+  coordinates: [number, number];
+  name: string;
+  city: string;
+}
+
+// Add this function to fetch airport data
+const fetchAirportData = async (icao: string): Promise<MapAirport | null> => {
+  try {
+    console.log(`Fetching data for airport: ${icao}`);
+    const { data } = await axios.get(`/api/airports/search?query=${icao}`, {
+      headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+    });
+    
+    console.log(`Airport search results for ${icao}:`, data);
+    
+    if (data && data.length > 0) {
+      const airport = data[0];
+      return {
+        icao,
+        coordinates: airport.coordinates,
+        name: airport.name,
+        city: airport.city
+      };
+    }
+    return null;
+  } catch (error) {
+    console.error(`Error fetching airport data for ${icao}:`, error);
+    return null;
+  }
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -990,6 +1051,11 @@ const Dashboard = () => {
     email: ''
   });
   const [hasWebGLSupport, setHasWebGLSupport] = useState(true);
+  const [mapTrips, setMapTrips] = useState<MapTrip[]>([]);
+  const [airports, setAirports] = useState<Record<string, MapAirport>>({});
+  const [hoveredTripId, setHoveredTripId] = useState<number | null>(null);
+  const markers = useRef<mapboxgl.Marker[]>([]);
+  const [mapLoaded, setMapLoaded] = useState(false);
 
   // Check for token before any data fetching
   useEffect(() => {
@@ -1030,73 +1096,345 @@ const Dashboard = () => {
     fetchData();
   }, [navigate]);
 
-  // Update the map initialization useEffect
+  // Add a useEffect to check if the Mapbox token is being loaded correctly
   useEffect(() => {
-    if (!mapContainer.current || map.current || isLoading) {
+    // Check if the Mapbox token is available
+    const token = import.meta.env.VITE_MAPBOX_TOKEN;
+    console.log('Mapbox token available:', !!token);
+    if (!token) {
+      console.error('Mapbox token is missing in environment variables');
+      setError('Mapbox token is missing. Please check your .env file.');
+      setHasWebGLSupport(false);
+    }
+  }, []);
+
+  // Update the initializeMap function to ensure proper loading
+  const initializeMap = async () => {
+    if (!mapContainer.current) return;
+    
+    try {
+      setIsLoadingMap(true);
+      
+      // Get the token directly
+      const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
+      if (!MAPBOX_TOKEN) {
+        throw new Error('Mapbox token is missing');
+      }
+      
+      console.log('Initializing map with token:', MAPBOX_TOKEN);
+      mapboxgl.accessToken = MAPBOX_TOKEN;
+      
+      // Create the map with 3D globe view
+      const newMap = new mapboxgl.Map({
+        container: mapContainer.current,
+        style: 'mapbox://styles/mapbox/dark-v11',
+        center: [-95.7129, 37.0902],
+        zoom: 2,
+        projection: 'globe' // Use globe projection for 3D view
+      });
+      
+      // Set the map reference
+      map.current = newMap;
+      
+      // Add event listeners
+      newMap.on('load', () => {
+        console.log('Map loaded successfully');
+        
+        // Add atmosphere and stars for 3D globe effect
+        newMap.setFog({
+          color: 'rgb(4, 6, 22)', // night sky
+          'high-color': 'rgb(36, 92, 223)', // blue atmosphere
+          'horizon-blend': 0.4,
+          'space-color': 'rgb(0, 0, 10)', // dark space
+          'star-intensity': 0.6 // stars in the night sky
+        });
+        
+        setIsInitialized(true);
+        setMapLoaded(true);
+        setIsLoadingMap(false);
+        
+        // Wait a moment before updating trips to ensure the map is fully rendered
+        setTimeout(() => {
+          updateMapTrips();
+        }, 500);
+      });
+      
+      newMap.on('error', (e) => {
+        console.error('Mapbox error:', e);
+        setIsLoadingMap(false);
+        setError('Error loading map: ' + (e.error?.message || 'Unknown error'));
+      });
+    } catch (error: any) {
+      console.error('Error initializing map:', error);
+      setHasWebGLSupport(false);
+      setIsLoadingMap(false);
+      setError(error.message || 'Error initializing map');
+    }
+  };
+
+  // Update the updateMapTrips function to ensure proper rendering
+  const updateMapTrips = async () => {
+    if (!map.current || !map.current.loaded()) {
+      console.log('Map not loaded yet, skipping updateMapTrips');
       return;
     }
+    
+    console.log('Updating map trips...');
+    
+    try {
+      // Clear existing markers
+      markers.current.forEach(marker => marker.remove());
+      markers.current = [];
 
-    const initializeMap = async () => {
+      // Remove existing layers and sources
+      mapTrips.forEach(trip => {
+        if (map.current?.getLayer(trip.layerId)) {
+          map.current.removeLayer(trip.layerId);
+        }
+        if (map.current?.getSource(trip.sourceId)) {
+          map.current.removeSource(trip.sourceId);
+        }
+      });
+
+      // Get trips that should be displayed
+      const tripsToDisplay = trips.filter(trip => 
+        trip.status === 'scheduled' || trip.status === 'departed'
+      );
+      
+      console.log('Trips to display:', tripsToDisplay);
+      
+      if (tripsToDisplay.length === 0) {
+        console.log('No trips to display on map');
+        setMapTrips([]);
+        return;
+      }
+
+      // Fetch airport coordinates for all unique airports
+      const uniqueAirports = new Set(
+        tripsToDisplay.flatMap(trip => [trip.departure_airport, trip.arrival_airport])
+      );
+      
+      console.log('Unique airports to fetch:', Array.from(uniqueAirports));
+      
+      const newAirports: Record<string, MapAirport> = { ...airports };
+      
+      // Fetch airport data for each unique airport
+      for (const icao of uniqueAirports) {
+        if (airports[icao]) continue;
+        
+        const airportData = await fetchAirportData(icao);
+        if (airportData) {
+          newAirports[icao] = airportData;
+        }
+      }
+      
+      console.log('Updated airports data:', newAirports);
+      setAirports(newAirports);
+
+      // Create new map trips with coordinates
+      const newMapTrips = tripsToDisplay
+        .map(trip => {
+          const departureAirport = newAirports[trip.departure_airport];
+          const arrivalAirport = newAirports[trip.arrival_airport];
+          
+          if (!departureAirport || !arrivalAirport) {
+            console.warn(`Missing airport data for trip ${trip.id}:`, {
+              departure: trip.departure_airport,
+              arrival: trip.arrival_airport,
+              departureData: departureAirport,
+              arrivalData: arrivalAirport
+            });
+            return null;
+          }
+
+          return {
+            ...trip,
+            coordinates: [departureAirport.coordinates, arrivalAirport.coordinates],
+            sourceId: `route-source-${trip.id}`,
+            layerId: `route-layer-${trip.id}`
+          };
+        })
+        .filter((trip): trip is MapTrip => trip !== null);
+      
+      console.log('New map trips:', newMapTrips);
+      setMapTrips(newMapTrips);
+
+      if (newMapTrips.length === 0) {
+        console.log('No valid map trips after processing');
+        return;
+      }
+
+      // Add airport markers first
+      const airportsToShow = new Set<string>();
+      newMapTrips.forEach(trip => {
+        airportsToShow.add(trip.departure_airport);
+        airportsToShow.add(trip.arrival_airport);
+      });
+
+      // Add airport markers
+      Array.from(airportsToShow).forEach(icaoCode => {
+        const airport = newAirports[icaoCode];
+        if (!airport) return;
+        
+        try {
+          console.log(`Adding marker for airport: ${airport.icao}`);
+          
+          // Create a custom HTML element for the marker
+          const el = document.createElement('div');
+          el.className = 'airport-marker';
+          el.style.width = '14px';
+          el.style.height = '14px';
+          el.style.borderRadius = '50%';
+          el.style.backgroundColor = '#ffffff';
+          el.style.border = '3px solid #374151';
+          el.style.boxShadow = '0 0 5px rgba(0, 0, 0, 0.5)';
+          
+          // Create the marker
+          const marker = new mapboxgl.Marker(el)
+            .setLngLat(airport.coordinates)
+            .setPopup(
+              new mapboxgl.Popup({ offset: 25 })
+                .setHTML(`
+                  <div>
+                    <div style="font-weight: bold;">${airport.icao}</div>
+                    <div>${airport.name}</div>
+                    <div style="color: #9CA3AF;">${airport.city}</div>
+                  </div>
+                `)
+            )
+            .addTo(map.current!);
+
+          markers.current.push(marker);
+        } catch (error) {
+          console.error(`Error adding marker for airport ${airport.icao}:`, error);
+        }
+      });
+
+      // Then add route lines
+      newMapTrips.forEach(trip => {
+        try {
+          console.log(`Adding route for trip ${trip.id}`);
+          
+          // Add the route source
+          map.current?.addSource(trip.sourceId, {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {
+                tripId: trip.id,
+                status: trip.status
+              },
+              geometry: {
+                type: 'LineString',
+                coordinates: trip.coordinates
+              }
+            }
+          });
+
+          // Add the route layer
+          map.current?.addLayer({
+            id: trip.layerId,
+            type: 'line',
+            source: trip.sourceId,
+            layout: {
+              'line-join': 'round',
+              'line-cap': 'round'
+            },
+            paint: {
+              'line-color': trip.status === 'scheduled' ? '#3b82f6' : '#10b981',
+              'line-width': [
+                'case',
+                ['==', ['number', ['get', 'tripId']], hoveredTripId || -1],
+                5,
+                3
+              ],
+              'line-opacity': [
+                'case',
+                ['==', ['number', ['get', 'tripId']], hoveredTripId || -1],
+                1,
+                0.7
+              ]
+            }
+          });
+
+          // Add hover effect
+          map.current?.on('mouseenter', trip.layerId, () => {
+            if (map.current) map.current.getCanvas().style.cursor = 'pointer';
+            setHoveredTripId(trip.id);
+          });
+
+          map.current?.on('mouseleave', trip.layerId, () => {
+            if (map.current) map.current.getCanvas().style.cursor = '';
+            setHoveredTripId(null);
+          });
+        } catch (error) {
+          console.error(`Error adding route for trip ${trip.id}:`, error);
+        }
+      });
+
+      // Fit the map to show all routes
+      if (newMapTrips.length > 0) {
+        try {
+          const bounds = new mapboxgl.LngLatBounds();
+          newMapTrips.forEach(trip => {
+            trip.coordinates.forEach(coord => {
+              bounds.extend(coord as mapboxgl.LngLatLike);
+            });
+          });
+          
+          console.log('Fitting map to bounds:', bounds);
+          map.current.fitBounds(bounds, { padding: 50 });
+        } catch (error) {
+          console.error('Error fitting map to bounds:', error);
+        }
+      }
+    } catch (error) {
+      console.error('Error updating map trips:', error);
+    }
+  };
+
+  // Add a useEffect to update the map when trips change
+  useEffect(() => {
+    if (mapLoaded && map.current && trips.length > 0) {
+      console.log('Trips changed, updating map trips');
+      updateMapTrips();
+    }
+  }, [trips, mapLoaded]);
+
+  // Update the useEffect to call updateMapTrips when trips change
+  useEffect(() => {
+    if (map.current && isInitialized && trips.length > 0) {
+      console.log('Trips changed, updating map trips');
+      updateMapTrips();
+    }
+  }, [trips, isInitialized]);
+
+  // Update the useEffect for hoveredTripId
+  useEffect(() => {
+    if (!map.current || !isInitialized) return;
+    
+    // Update the appearance of all trip routes based on hover state
+    mapTrips.forEach(trip => {
       try {
-        setIsLoadingMap(true);
-        
-        if (!MAPBOX_TOKEN) {
-          throw new Error('Mapbox token is not set in environment variables');
+        const source = map.current?.getSource(trip.sourceId) as mapboxgl.GeoJSONSource;
+        if (source) {
+          source.setData({
+            type: 'Feature',
+            properties: {
+              tripId: trip.id,
+              status: trip.status
+            },
+            geometry: {
+              type: 'LineString',
+              coordinates: trip.coordinates
+            }
+          });
         }
-
-        // Check for WebGL support before initializing the map
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-        
-        if (!gl) {
-          setHasWebGLSupport(false);
-          setError(getWebGLErrorMessage());
-          setIsLoadingMap(false);
-          return;
-        }
-
-        mapboxgl.accessToken = MAPBOX_TOKEN;
-        const mapInstance = new mapboxgl.Map({
-          container: mapContainer.current!,
-          style: 'mapbox://styles/mapbox/dark-v11',
-          center: [-98.5795, 39.8283],
-          zoom: 3,
-          failIfMajorPerformanceCaveat: true,
-          antialias: true // Enable antialiasing for better rendering
-        });
-
-        map.current = mapInstance;
-
-        mapInstance.on('load', () => {
-          console.log('Map loaded successfully');
-          setIsInitialized(true);
-          setIsLoadingMap(false);
-        });
-
-        mapInstance.on('error', (e) => {
-          console.error('Mapbox error:', e);
-          setError('Error loading map: ' + (e.error?.message || 'Unknown error'));
-          setIsInitialized(true);
-          setIsLoadingMap(false);
-        });
-
       } catch (error) {
-        console.error('Error initializing map:', error);
-        setError(error instanceof Error ? error.message : 'Error initializing map');
-        setIsLoadingMap(false);
-        setHasWebGLSupport(false);
+        console.error(`Error updating hover state for trip ${trip.id}:`, error);
       }
-    };
-
-    initializeMap();
-
-    return () => {
-      if (map.current) {
-        map.current.remove();
-        map.current = null;
-      }
-    };
-  }, [isLoading]);
+    });
+  }, [hoveredTripId]);
 
   const fetchPlanes = async () => {
     try {
@@ -1250,14 +1588,20 @@ const Dashboard = () => {
     try {
       if (!selectedPlane) return;
       
+      console.log('Selected plane:', selectedPlane);
+      console.log('All trips:', trips);
+      
       // Check if the plane is on any departed or arrived trips
       const activeTrips = trips.filter(trip => 
         trip.plane_id === selectedPlane.id && 
         (trip.status === 'departed' || trip.status === 'arrived')
       );
 
+      console.log('Active trips for selected plane:', activeTrips);
+
       if (activeTrips.length > 0) {
         setError('Cannot delete plane as it is assigned to trips that have already departed or arrived');
+        setShowDeleteConfirmation(true);
         return;
       }
       
@@ -1382,12 +1726,35 @@ const Dashboard = () => {
     }
   };
 
+  // Add this useEffect to initialize the map
+  useEffect(() => {
+    if (!mapContainer.current || map.current || isLoading) {
+      console.log('Skipping map initialization:', {
+        hasContainer: !!mapContainer.current,
+        mapAlreadyExists: !!map.current,
+        isLoading
+      });
+      return;
+    }
+    
+    console.log('Starting map initialization...');
+    initializeMap();
+    
+    return () => {
+      if (map.current) {
+        console.log('Cleaning up map');
+        map.current.remove();
+        map.current = null;
+      }
+    };
+  }, [isLoading]);
+
   if (isLoading) {
     return <Loading message="Loading Data..." />;
   }
 
   return (
-    <div className="h-screen flex flex-col bg-gray-900">
+    <div className="flex flex-col h-screen bg-gray-900 text-white">
       {/* Header */}
       <header className="bg-gray-800 border-b border-gray-700">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex justify-between items-center">
@@ -1404,37 +1771,20 @@ const Dashboard = () => {
       <div className="flex-1 flex overflow-hidden relative">
         {/* Map */}
         <div className="flex-1 relative">
-          {!hasWebGLSupport ? (
-            <div className="absolute inset-0 bg-gray-800 flex items-center justify-center p-4">
-              <div className="text-center max-w-md">
-                <h2 className="text-xl font-semibold text-white mb-2">Map Not Available</h2>
-                <p className="text-gray-300 mb-4">
-                  {error || getWebGLErrorMessage()}
-                </p>
-                <div className="text-sm text-gray-400">
-                  <p className="mb-2">To fix this issue, try:</p>
-                  <ul className="list-disc list-inside">
-                    <li>Enabling hardware acceleration in your browser</li>
-                    <li>Updating your graphics drivers</li>
-                    <li>Using a modern browser like Chrome or Firefox</li>
-                    <li>Disabling any browser extensions that might interfere with WebGL</li>
-                  </ul>
-                </div>
+          {isLoadingMap && <Loading message="Loading map..." />}
+          {!hasWebGLSupport && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-800 text-white p-4 z-40">
+              <div className="max-w-md text-center">
+                <h2 className="text-xl font-bold mb-2">WebGL Not Supported</h2>
+                <p>{error || getWebGLErrorMessage()}</p>
               </div>
             </div>
-          ) : (
-            <>
-              <div ref={mapContainer} className="absolute inset-0" />
-              {isLoadingMap && (
-                <div className="absolute inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-10">
-                  <div className="text-center">
-                    <h2 className="text-xl font-semibold text-gray-200">Initializing Map...</h2>
-                    <p className="text-gray-400 mt-2">Please wait while we set up your dashboard</p>
-                  </div>
-                </div>
-              )}
-            </>
           )}
+          <div 
+            ref={mapContainer} 
+            className="w-full h-full" 
+            style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0 }}
+          />
         </div>
 
         {/* Side Panel */}
@@ -1488,6 +1838,8 @@ const Dashboard = () => {
                   pilots={pilots}
                   planes={planes}
                   onClick={() => setSelectedTrip(trip)}
+                  isHovered={hoveredTripId === trip.id}
+                  onHover={setHoveredTripId}
                 />
               ))}
               {trips.length === 0 && (
@@ -1526,7 +1878,10 @@ const Dashboard = () => {
       {selectedPlane && (
         <PlaneDetailsModal
           plane={selectedPlane}
-          onClose={() => setSelectedPlane(null)}
+          onClose={() => {
+            setSelectedPlane(null);
+            setError(''); // Clear error when closing the modal
+          }}
           onSave={handleUpdatePlane}
           onDelete={() => setShowDeleteConfirmation(true)}
         />
@@ -1545,6 +1900,7 @@ const Dashboard = () => {
         <ConfirmationModal
           title="Delete Plane"
           message={`Are you sure you want to delete ${selectedPlane.tail_number}? This action cannot be undone.`}
+          errorMessage={error}
           onConfirm={handleDeletePlane}
           onCancel={() => setShowDeleteConfirmation(false)}
         />
@@ -1644,7 +2000,7 @@ const Dashboard = () => {
                 <input
                   type="text"
                   placeholder="Enter a nickname"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                   value={newPlane.nickname}
                   onChange={e => setNewPlane({ ...newPlane, nickname: e.target.value })}
                 />

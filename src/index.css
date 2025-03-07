@@ -7,6 +7,24 @@
   height: 100%;
 }
 
+/* Airport marker styles */
+.mapboxgl-marker {
+  width: 16px;
+  height: 16px;
+}
+
+.mapboxgl-popup {
+  max-width: 200px;
+}
+
+.mapboxgl-popup-content {
+  padding: 10px;
+  border-radius: 4px;
+  background-color: #1f2937;
+  color: white;
+  border: 1px solid #374151;
+}
+
 /* Modern scrollbar styles */
 ::-webkit-scrollbar {
   width: 8px;
