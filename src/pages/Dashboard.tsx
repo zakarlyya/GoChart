@@ -10,6 +10,7 @@ import axios from 'axios';
 declare global {
   interface ImportMetaEnv {
     VITE_MAPBOX_TOKEN: string;
+    VITE_MAGICAPI_KEY: string;
   }
 }
 
@@ -66,8 +67,6 @@ console.log('Mapbox token status:', {
   tokenExists: !!import.meta.env.VITE_MAPBOX_TOKEN,
   tokenLength: import.meta.env.VITE_MAPBOX_TOKEN?.length
 });
-
-const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 
 // Add this function near the top of the file, after imports
 const getWebGLErrorMessage = () => {
@@ -992,12 +991,9 @@ interface MapAirport {
 // Add this function to fetch airport data
 const fetchAirportData = async (icao: string): Promise<MapAirport | null> => {
   try {
-    console.log(`Fetching data for airport: ${icao}`);
     const { data } = await axios.get(`/api/airports/search?query=${icao}`, {
       headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
     });
-    
-    console.log(`Airport search results for ${icao}:`, data);
     
     if (data && data.length > 0) {
       const airport = data[0];
@@ -1010,7 +1006,6 @@ const fetchAirportData = async (icao: string): Promise<MapAirport | null> => {
     }
     return null;
   } catch (error) {
-    console.error(`Error fetching airport data for ${icao}:`, error);
     return null;
   }
 };
@@ -1087,25 +1082,17 @@ const Dashboard = () => {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        const [planesData, tripsData, pilotsData] = await Promise.all([
+        
+        await Promise.all([
           fetchPlanes(),
           fetchTrips(),
           fetchPilots()
         ]);
-        console.log('Data fetched successfully:', {
-          planes: planesData,
-          trips: tripsData,
-          pilots: pilotsData
-        });
-      } catch (error) {
-        console.error('Error fetching data:', error);
-        if (axios.isAxiosError(error) && error.response?.status === 401) {
-          handleLogout();
-          return;
-        }
-        setError(error instanceof Error ? error.message : 'Error fetching data');
-      } finally {
+        
         setIsLoading(false);
+      } catch (error) {
+        setIsLoading(false);
+        setError('Failed to fetch data. Please try again.');
       }
     };
 
@@ -1137,7 +1124,7 @@ const Dashboard = () => {
         throw new Error('Mapbox token is missing');
       }
       
-      console.log('Initializing map with token:', MAPBOX_TOKEN);
+      // Remove console.log statement
       mapboxgl.accessToken = MAPBOX_TOKEN;
       
       // Create the map with 3D globe view
@@ -1154,7 +1141,7 @@ const Dashboard = () => {
       
       // Add event listeners
       newMap.on('load', () => {
-        console.log('Map loaded successfully');
+        // Remove console.log statement
         
         // Add atmosphere and stars for 3D globe effect
         newMap.setFog({
@@ -1176,12 +1163,12 @@ const Dashboard = () => {
       });
       
       newMap.on('error', (e) => {
-        console.error('Mapbox error:', e);
+        // Remove console.log statement
         setIsLoadingMap(false);
         setError('Error loading map: ' + (e.error?.message || 'Unknown error'));
       });
     } catch (error: any) {
-      console.error('Error initializing map:', error);
+      // Remove console.log statement
       setHasWebGLSupport(false);
       setIsLoadingMap(false);
       setError(error.message || 'Error initializing map');
@@ -1191,11 +1178,11 @@ const Dashboard = () => {
   // Update the updateMapTrips function to ensure proper rendering
   const updateMapTrips = async () => {
     if (!map.current || !map.current.loaded()) {
-      console.log('Map not loaded yet, skipping updateMapTrips');
+      // Remove console.log statement
       return;
     }
     
-    console.log('Updating map trips...');
+    // Remove console.log statement
     
     try {
       // Clear existing markers
@@ -1212,7 +1199,7 @@ const Dashboard = () => {
             map.current.removeSource(trip.sourceId);
           }
         } catch (error) {
-          console.error(`Error removing layer/source for trip ${trip.id}:`, error);
+          // Remove console.log statement
         }
       });
 
@@ -1221,10 +1208,10 @@ const Dashboard = () => {
         trip.status === 'scheduled' || trip.status === 'departed'
       );
       
-      console.log('Trips to display:', tripsToDisplay);
+      // Remove console.log statement
       
       if (tripsToDisplay.length === 0) {
-        console.log('No trips to display on map');
+        // Remove console.log statement
         setMapTrips([]);
         return;
       }
@@ -1234,7 +1221,7 @@ const Dashboard = () => {
         tripsToDisplay.flatMap(trip => [trip.departure_airport, trip.arrival_airport])
       );
       
-      console.log('Unique airports to fetch:', Array.from(uniqueAirports));
+      // Remove console.log statement
       
       const newAirports: Record<string, MapAirport> = { ...airports };
       
@@ -1248,7 +1235,7 @@ const Dashboard = () => {
         }
       }
       
-      console.log('Updated airports data:', newAirports);
+      // Remove console.log statement
       setAirports(newAirports);
 
       // Create new map trips with coordinates
@@ -1258,12 +1245,7 @@ const Dashboard = () => {
           const arrivalAirport = newAirports[trip.arrival_airport];
           
           if (!departureAirport || !arrivalAirport) {
-            console.warn(`Missing airport data for trip ${trip.id}:`, {
-              departure: trip.departure_airport,
-              arrival: trip.arrival_airport,
-              departureData: departureAirport,
-              arrivalData: arrivalAirport
-            });
+            // Remove console.log statement
             return null;
           }
 
@@ -1276,11 +1258,11 @@ const Dashboard = () => {
         })
         .filter((trip): trip is MapTrip => trip !== null);
       
-      console.log('New map trips:', newMapTrips);
+      // Remove console.log statement
       setMapTrips(newMapTrips);
 
       if (newMapTrips.length === 0) {
-        console.log('No valid map trips after processing');
+        // Remove console.log statement
         return;
       }
 
@@ -1297,7 +1279,7 @@ const Dashboard = () => {
         if (!airport) return;
         
         try {
-          console.log(`Adding marker for airport: ${airport.icao}`);
+          // Remove console.log statement
           
           // Create a custom HTML element for the marker
           const el = document.createElement('div');
@@ -1326,14 +1308,14 @@ const Dashboard = () => {
 
           markers.current.push(marker);
         } catch (error) {
-          console.error(`Error adding marker for airport ${airport.icao}:`, error);
+          // Remove console.log statement
         }
       });
 
       // Then add route lines
       newMapTrips.forEach(trip => {
         try {
-          console.log(`Adding route for trip ${trip.id}`);
+          // Remove console.log statement
           
           // Check if source already exists and remove it
           if (map.current?.getSource(trip.sourceId)) {
@@ -1342,9 +1324,9 @@ const Dashboard = () => {
                 map.current.removeLayer(trip.layerId);
               }
               map.current.removeSource(trip.sourceId);
-              console.log(`Removed existing source for trip ${trip.id}`);
+              // Remove console.log statement
             } catch (error) {
-              console.error(`Error removing existing source for trip ${trip.id}:`, error);
+              // Remove console.log statement
             }
           }
           
@@ -1402,7 +1384,7 @@ const Dashboard = () => {
             setHoveredTripId(null);
           });
         } catch (error) {
-          console.error(`Error adding route for trip ${trip.id}:`, error);
+          // Remove console.log statement
         }
       });
 
@@ -1416,21 +1398,21 @@ const Dashboard = () => {
             });
           });
           
-          console.log('Fitting map to bounds:', bounds);
+          // Remove console.log statement
           map.current.fitBounds(bounds, { padding: 50 });
         } catch (error) {
-          console.error('Error fitting map to bounds:', error);
+          // Remove console.log statement
         }
       }
     } catch (error) {
-      console.error('Error updating map trips:', error);
+      // Remove console.log statement
     }
   };
 
   // Fix the duplicate useEffect calls
   useEffect(() => {
     if (mapLoaded && map.current && trips.length > 0) {
-      console.log('Map loaded and trips available, updating map trips');
+      // Remove console.log statement
       updateMapTrips();
     }
   }, [mapLoaded, trips.length]);
@@ -1458,22 +1440,19 @@ const Dashboard = () => {
           });
         }
       } catch (error) {
-        console.error(`Error updating hover state for trip ${trip.id}:`, error);
+        // Remove console.log statement
       }
     });
   }, [hoveredTripId, mapTrips]);
 
   const fetchPlanes = async () => {
     try {
-      console.log('Fetching planes...');
       const { data } = await axios.get('/api/planes', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
-      console.log('Planes fetched:', data);
       setPlanes(data);
       return data;
     } catch (error: any) {
-      console.error('Error fetching planes:', error);
       const errorMessage = error.response?.data?.error || 'Error fetching planes';
       setError(errorMessage);
       if (error.response?.status === 401) {
@@ -1485,15 +1464,12 @@ const Dashboard = () => {
 
   const fetchTrips = async () => {
     try {
-      console.log('Fetching trips...');
       const { data } = await axios.get('/api/trips', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
-      console.log('Trips fetched:', data);
       setTrips(data);
       return data;
     } catch (error: any) {
-      console.error('Error fetching trips:', error);
       const errorMessage = error.response?.data?.error || 'Error fetching trips';
       setError(errorMessage);
       if (error.response?.status === 401) {
@@ -1505,15 +1481,12 @@ const Dashboard = () => {
 
   const fetchPilots = async () => {
     try {
-      console.log('Fetching pilots...');
       const { data } = await axios.get('/api/pilots', {
         headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
       });
-      console.log('Pilots fetched:', data);
       setPilots(data);
       return data;
     } catch (error: any) {
-      console.error('Error fetching pilots:', error);
       const errorMessage = error.response?.data?.error || 'Error fetching pilots';
       setError(errorMessage);
       if (error.response?.status === 401) {
@@ -1525,26 +1498,40 @@ const Dashboard = () => {
 
   const handleAddPlane = async () => {
     try {
-      setError(''); // Clear any existing errors
+      setError('');
+      
       if (!newPlane.tail_number || !newPlane.model || !newPlane.manufacturer) {
-        setError('Tail number, model, and manufacturer are required');
+        setError('Please fill in all required fields');
         return;
       }
-
-      const { data } = await axios.post(
-        '/api/planes',
-        newPlane,
-        {
-          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
-        }
-      );
       
-      // Update the planes list with the new plane
+      const { data } = await axios.post('/api/planes', {
+        tail_number: newPlane.tail_number,
+        model: newPlane.model,
+        manufacturer: newPlane.manufacturer,
+        nickname: newPlane.nickname,
+        num_engines: newPlane.num_engines,
+        num_seats: newPlane.num_seats
+      }, {
+        headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+      });
+      
       setPlanes([...planes, data]);
       setShowAddPlane(false);
-      setNewPlane({ tail_number: '', model: '', manufacturer: '', nickname: '', num_engines: 2, num_seats: 20, isLocked: false, modelLocked: false, manufacturerLocked: false, enginesLocked: false, seatsLocked: false });
+      setNewPlane({
+        tail_number: '',
+        model: '',
+        manufacturer: '',
+        nickname: '',
+        num_engines: 2,
+        num_seats: 20,
+        isLocked: false,
+        modelLocked: false,
+        manufacturerLocked: false,
+        enginesLocked: false,
+        seatsLocked: false
+      });
     } catch (error: any) {
-      console.error('Error adding plane:', error);
       setError(error.response?.data?.error || 'Error adding plane');
     }
   };
@@ -1764,12 +1751,10 @@ const Dashboard = () => {
       return;
     }
     
-    console.log('Starting map initialization...');
     initializeMap();
     
     return () => {
       if (map.current) {
-        console.log('Cleaning up map');
         map.current.remove();
         map.current = null;
       }
@@ -1789,7 +1774,7 @@ const Dashboard = () => {
         `https://prod.api.market/api/v1/aedbx/aerodatabox/aircrafts/Reg/${newPlane.tail_number}`,
         {
           headers: {
-            'x-magicapi-key': 'cm7y3fnmy0008l103e19tu2sg'
+            'x-magicapi-key': import.meta.env.VITE_MAGICAPI_KEY
           }
         }
       );
@@ -2103,6 +2088,8 @@ const Dashboard = () => {
                     num_engines: 2,
                     num_seats: 20,
                     isLocked: false,
+                    modelLocked: false,
+                    manufacturerLocked: false,
                     enginesLocked: false,
                     seatsLocked: false
                   });

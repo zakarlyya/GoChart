@@ -1,138 +1,188 @@
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
 
-const db = new sqlite3.Database(path.join(__dirname, 'gochart.db'));
+// Database path
+const dbPath = path.resolve(__dirname, 'gochart.db');
 
-// Create tables
-db.serialize(() => {
-  // Users table
-  db.run(`CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    company_name TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )`);
+/**
+ * Create and initialize the database connection
+ */
+const initializeDatabase = () => {
+  // Create tables and schema
+  createTables();
+  
+  // Check and update schema if needed
+  updateSchemaIfNeeded();
+};
 
-  // Planes table
-  db.run(`CREATE TABLE IF NOT EXISTS planes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    tail_number TEXT UNIQUE NOT NULL,
-    model TEXT NOT NULL,
-    manufacturer TEXT,
-    nickname TEXT,
-    range_nm FLOAT,
-    cruise_speed_kts FLOAT,
-    fuel_capacity_gal FLOAT,
-    num_engines INTEGER DEFAULT 2,
-    num_seats INTEGER DEFAULT 20,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  )`);
+/**
+ * Create database tables if they don't exist
+ */
+const createTables = () => {
+  db.serialize(() => {
+    // Enable foreign keys
+    db.run('PRAGMA foreign_keys = ON');
+    
+    // Create users table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        company_name TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    // Create planes table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS planes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        tail_number TEXT NOT NULL,
+        model TEXT NOT NULL,
+        manufacturer TEXT NOT NULL,
+        nickname TEXT,
+        num_engines INTEGER DEFAULT 2,
+        num_seats INTEGER DEFAULT 20,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    
+    // Create pilots table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS pilots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        license_number TEXT NOT NULL,
+        rating TEXT,
+        total_hours INTEGER,
+        contact_number TEXT,
+        email TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    
+    // Create trips table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS trips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        plane_id INTEGER NOT NULL,
+        pilot_id INTEGER,
+        departure_airport TEXT NOT NULL,
+        arrival_airport TEXT NOT NULL,
+        departure_time TEXT NOT NULL,
+        estimated_arrival_time TEXT NOT NULL,
+        actual_departure_time TEXT,
+        actual_arrival_time TEXT,
+        status TEXT DEFAULT 'scheduled',
+        estimated_fuel_cost INTEGER,
+        estimated_total_cost INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (plane_id) REFERENCES planes(id) ON DELETE RESTRICT,
+        FOREIGN KEY (pilot_id) REFERENCES pilots(id) ON DELETE SET NULL
+      )
+    `);
+  });
+};
 
-  // Check if num_engines and num_seats columns exist in planes table
+/**
+ * Check if columns exist and add them if they don't
+ */
+const updateSchemaIfNeeded = () => {
+  // Check planes table schema
+  updatePlanesSchema();
+  
+  // Check trips table schema
+  updateTripsSchema();
+};
+
+/**
+ * Update planes table schema if needed
+ */
+const updatePlanesSchema = () => {
   db.all("PRAGMA table_info(planes)", (err, rows) => {
     if (err) {
       console.error('Error checking planes table schema:', err);
       return;
     }
     
-    const hasNumEngines = rows.some(row => row.name === 'num_engines');
-    const hasNumSeats = rows.some(row => row.name === 'num_seats');
-    
-    if (!hasNumEngines) {
-      console.log('Adding num_engines column to planes table...');
-      db.run(`ALTER TABLE planes ADD COLUMN num_engines INTEGER DEFAULT 2`, (err) => {
-        if (err) {
-          console.error('Error adding num_engines column:', err);
-        } else {
-          console.log('Successfully added num_engines column to planes table');
-        }
-      });
-    }
-
-    if (!hasNumSeats) {
-      console.log('Adding num_seats column to planes table...');
-      db.run(`ALTER TABLE planes ADD COLUMN num_seats INTEGER DEFAULT 20`, (err) => {
-        if (err) {
-          console.error('Error adding num_seats column:', err);
-        } else {
-          console.log('Successfully added num_seats column to planes table');
-        }
-      });
+    if (!rows || !Array.isArray(rows)) {
+      console.error('Invalid response when checking planes table schema');
+      return;
     }
     
-    // Check if nickname column exists in the returned rows
-    const hasNickname = rows.some(row => row.name === 'nickname');
+    // Add num_engines column if it doesn't exist
+    if (!rows.some(row => row.name === 'num_engines')) {
+      addColumnToPlanes('num_engines', 'INTEGER DEFAULT 2');
+    }
     
-    if (!hasNickname) {
-      console.log('Adding nickname column to planes table...');
-      db.run(`ALTER TABLE planes ADD COLUMN nickname TEXT`, (err) => {
-        if (err) {
-          console.error('Error adding nickname column:', err);
-        } else {
-          console.log('Successfully added nickname column to planes table');
-        }
-      });
+    // Add num_seats column if it doesn't exist
+    if (!rows.some(row => row.name === 'num_seats')) {
+      addColumnToPlanes('num_seats', 'INTEGER DEFAULT 20');
+    }
+    
+    // Add nickname column if it doesn't exist
+    if (!rows.some(row => row.name === 'nickname')) {
+      addColumnToPlanes('nickname', 'TEXT');
     }
   });
+};
 
-  // Pilots table
-  db.run(`CREATE TABLE IF NOT EXISTS pilots (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    name TEXT NOT NULL,
-    license_number TEXT NOT NULL,
-    rating TEXT,
-    total_hours FLOAT,
-    contact_number TEXT,
-    email TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  )`);
+/**
+ * Add a column to the planes table
+ * @param {string} columnName - Name of the column to add
+ * @param {string} columnType - SQL type definition for the column
+ */
+const addColumnToPlanes = (columnName, columnType) => {
+  db.run(`ALTER TABLE planes ADD COLUMN ${columnName} ${columnType}`, (err) => {
+    if (err) {
+      console.error(`Error adding ${columnName} column:`, err);
+    }
+  });
+};
 
-  // Create trips table if it doesn't exist
-  db.run(`CREATE TABLE IF NOT EXISTS trips (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    plane_id INTEGER,
-    pilot_id INTEGER,
-    departure_airport TEXT NOT NULL,
-    arrival_airport TEXT NOT NULL,
-    departure_time DATETIME,
-    estimated_arrival_time DATETIME,
-    actual_departure_time DATETIME,
-    actual_arrival_time DATETIME,
-    status TEXT DEFAULT 'scheduled',
-    estimated_fuel_cost FLOAT,
-    estimated_total_cost FLOAT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id),
-    FOREIGN KEY(plane_id) REFERENCES planes(id),
-    FOREIGN KEY(pilot_id) REFERENCES pilots(id)
-  )`);
-
-  // Check if pilot_id column exists in trips table
+/**
+ * Update trips table schema if needed
+ */
+const updateTripsSchema = () => {
   db.all("PRAGMA table_info(trips)", (err, rows) => {
     if (err) {
       console.error('Error checking trips table schema:', err);
       return;
     }
     
-    // Check if pilot_id column exists in the returned rows
-    const hasPilotId = rows.some(row => row.name === 'pilot_id');
+    if (!rows || !Array.isArray(rows)) {
+      console.error('Invalid response when checking trips table schema');
+      return;
+    }
     
-    if (!hasPilotId) {
-      db.run(`ALTER TABLE trips ADD COLUMN pilot_id INTEGER REFERENCES pilots(id)`, (err) => {
+    // Add pilot_id column if it doesn't exist
+    if (!rows.some(row => row.name === 'pilot_id')) {
+      db.run("ALTER TABLE trips ADD COLUMN pilot_id INTEGER REFERENCES pilots(id) ON DELETE SET NULL", (err) => {
         if (err) {
           console.error('Error adding pilot_id column:', err);
-        } else {
-          console.log('Successfully added pilot_id column to trips table');
         }
       });
     }
   });
+};
+
+// Connect to database
+const db = new sqlite3.Database(dbPath, (err) => {
+  if (err) {
+    console.error('Error connecting to database:', err);
+    process.exit(1);
+  }
+  
+  // Initialize database schema
+  initializeDatabase();
 });
 
 module.exports = db; 

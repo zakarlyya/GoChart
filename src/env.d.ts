@@ -9,6 +9,7 @@ declare module '*.svg' {
 
 interface ImportMetaEnv {
   readonly VITE_MAPBOX_TOKEN: string;
+  readonly VITE_MAGICAPI_KEY: string;
   // Add other env variables here if needed
 }
 
