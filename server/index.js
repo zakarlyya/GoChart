@@ -7,6 +7,7 @@ const db = require('./database');
 const fs = require('fs');
 const path = require('path');
 const csv = require('csv-parse');
+const { authenticateToken } = require('./auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -41,14 +42,15 @@ const loadAirports = () => {
     })
     .on('end', () => {
       console.log(`Loaded ${airports.length} airports`);
+      // After loading airports, initialize the trips router
+      const { router: tripsRouter, setAirports } = require('./routes/trips');
+      setAirports(airports);
+      app.use('/api/trips', tripsRouter);
     })
     .on('error', (err) => {
       console.error('Error loading airports:', err);
     });
 };
-
-// Load airports on startup
-loadAirports();
 
 // Middleware
 app.use(cors());
@@ -65,19 +67,8 @@ app.use((req, res, next) => {
   next();
 });
 
-// Authentication middleware
-const authenticateToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1];
-
-  if (!token) return res.sendStatus(401);
-
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
-    req.user = user;
-    next();
-  });
-};
+// Load airports and initialize routes
+loadAirports();
 
 // Auth routes
 app.post('/api/register', async (req, res) => {
@@ -168,7 +159,7 @@ app.get('/api/planes', authenticateToken, (req, res) => {
 
 app.post('/api/planes', authenticateToken, (req, res) => {
   console.log('Adding new plane:', req.body);
-  const { tail_number, model, manufacturer, nickname, range_nm, cruise_speed_kts, fuel_capacity_gal } = req.body;
+  const { tail_number, model, manufacturer, nickname, range_nm, cruise_speed_kts, fuel_capacity_gal, num_engines, num_seats } = req.body;
   
   if (!tail_number || !model || !manufacturer) {
     console.error('Missing required fields');
@@ -178,9 +169,9 @@ app.post('/api/planes', authenticateToken, (req, res) => {
   db.run(
     `INSERT INTO planes (
       user_id, tail_number, model, manufacturer, nickname,
-      range_nm, cruise_speed_kts, fuel_capacity_gal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [req.user.id, tail_number, model, manufacturer, nickname || null, range_nm || null, cruise_speed_kts || null, fuel_capacity_gal || null],
+      range_nm, cruise_speed_kts, fuel_capacity_gal, num_engines, num_seats
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.id, tail_number, model, manufacturer, nickname || null, range_nm || null, cruise_speed_kts || null, fuel_capacity_gal || null, num_engines || 2, num_seats || 20],
     function(err) {
       if (err) {
         console.error('Error adding plane:', err);
@@ -202,101 +193,14 @@ app.post('/api/planes', authenticateToken, (req, res) => {
   );
 });
 
-app.get('/api/trips', authenticateToken, (req, res) => {
-  db.all(
-    'SELECT * FROM trips WHERE user_id = ? ORDER BY departure_time',
-    [req.user.id],
-    (err, trips) => {
-      if (err) return res.status(500).json({ error: 'Server error' });
-      res.json(trips);
-    }
-  );
-});
-
-app.post('/api/trips', authenticateToken, (req, res) => {
-  console.log('Creating new trip:', req.body);
-
-  const { 
-    departure_airport, 
-    arrival_airport, 
-    plane_id, 
-    pilot_id,
-    departure_time 
-  } = req.body;
-  
-  if (!departure_airport || !arrival_airport || !plane_id || !departure_time) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
-
-  // Convert plane_id and pilot_id to numbers
-  const parsedPlaneId = Number(plane_id);
-  const parsedPilotId = pilot_id ? Number(pilot_id) : null;
-
-  // Validate the date format
-  let departureDate;
-  try {
-    departureDate = new Date(departure_time);
-    if (isNaN(departureDate.getTime())) {
-      throw new Error('Invalid date');
-    }
-  } catch (error) {
-    console.error('Invalid departure time:', departure_time);
-    return res.status(400).json({ error: 'Invalid departure time format' });
-  }
-
-  // Estimate arrival time (2 hours after departure)
-  const estimatedArrival = new Date(departureDate.getTime() + (2 * 60 * 60 * 1000));
-
-  console.log('Inserting trip with values:', {
-    userId: req.user.id,
-    parsedPlaneId,
-    parsedPilotId,
-    departure_airport,
-    arrival_airport,
-    departure_time,
-    estimatedArrival: estimatedArrival.toISOString()
-  });
-
-  db.run(
-    `INSERT INTO trips (
-      user_id, plane_id, pilot_id, departure_airport, arrival_airport, 
-      departure_time, estimated_arrival_time, status, estimated_total_cost
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', 1000)`,
-    [
-      req.user.id,
-      parsedPlaneId,
-      parsedPilotId,
-      departure_airport,
-      arrival_airport,
-      departureDate.toISOString(),
-      estimatedArrival.toISOString()
-    ],
-    function(err) {
-      if (err) {
-        console.error('Error adding trip:', err);
-        return res.status(500).json({ error: `Error adding trip: ${err.message}` });
-      }
-      
-      db.get('SELECT * FROM trips WHERE id = ?', [this.lastID], (err, row) => {
-        if (err) {
-          console.error('Error fetching new trip:', err);
-          return res.status(500).json({ error: `Error fetching new trip: ${err.message}` });
-        }
-        console.log('Trip created successfully:', row);
-        res.status(201).json(row);
-      });
-    }
-  );
-});
-
 // Update plane
 app.put('/api/planes/:id', authenticateToken, (req, res) => {
-  const { tail_number, model, manufacturer, nickname } = req.body;
+  const { tail_number, model, manufacturer, nickname, num_engines, num_seats } = req.body;
   const planeId = req.params.id;
 
   console.log('Updating plane:', {
     planeId,
-    updates: { tail_number, model, manufacturer, nickname }
+    updates: { tail_number, model, manufacturer, nickname, num_engines, num_seats }
   });
 
   if (!tail_number || !model || !manufacturer) {
@@ -321,9 +225,9 @@ app.put('/api/planes/:id', authenticateToken, (req, res) => {
       // Update the plane
       db.run(
         `UPDATE planes 
-         SET tail_number = ?, model = ?, manufacturer = ?, nickname = ?
+         SET tail_number = ?, model = ?, manufacturer = ?, nickname = ?, num_engines = ?, num_seats = ?
          WHERE id = ? AND user_id = ?`,
-        [tail_number, model, manufacturer, nickname || null, planeId, req.user.id],
+        [tail_number, model, manufacturer, nickname || null, num_engines || 2, num_seats || 20, planeId, req.user.id],
         function(err) {
           if (err) {
             console.error('Error updating plane:', err);
@@ -373,121 +277,6 @@ app.delete('/api/planes/:id', authenticateToken, (req, res) => {
         (err) => {
           if (err) return res.status(500).json({ error: 'Error deleting plane' });
           res.json({ message: 'Plane deleted successfully' });
-        }
-      );
-    }
-  );
-});
-
-// Update trip
-app.put('/api/trips/:id', authenticateToken, (req, res) => {
-  console.log('Updating trip:', {
-    tripId: req.params.id,
-    body: req.body,
-    userId: req.user.id
-  });
-
-  const { 
-    status, 
-    pilot_id,
-    departure_time, 
-    estimated_arrival_time,
-    actual_departure_time,
-    actual_arrival_time 
-  } = req.body;
-
-  if (!status) {
-    return res.status(400).json({ error: 'Status is required' });
-  }
-
-  // Convert pilot_id to number or null
-  const parsedPilotId = pilot_id ? Number(pilot_id) : null;
-
-  // Validate and format dates
-  const formatDate = (dateStr) => {
-    if (!dateStr) return null;
-    try {
-      const date = new Date(dateStr);
-      if (isNaN(date.getTime())) {
-        throw new Error('Invalid date');
-      }
-      return date.toISOString();
-    } catch (error) {
-      console.error('Invalid date:', dateStr);
-      return null;
-    }
-  };
-
-  const formattedDates = {
-    departure_time: formatDate(departure_time),
-    estimated_arrival_time: formatDate(estimated_arrival_time),
-    actual_departure_time: formatDate(actual_departure_time),
-    actual_arrival_time: formatDate(actual_arrival_time)
-  };
-
-  // Log the values being used in the update
-  console.log('Update values:', {
-    status,
-    parsedPilotId,
-    ...formattedDates
-  });
-
-  db.run(
-    `UPDATE trips 
-     SET status = ?, pilot_id = ?, plane_id = ?, departure_time = ?, estimated_arrival_time = ?,
-         actual_departure_time = ?, actual_arrival_time = ?
-     WHERE id = ? AND user_id = ?`,
-    [
-      status, 
-      parsedPilotId,
-      req.body.plane_id,
-      formattedDates.departure_time,
-      formattedDates.estimated_arrival_time,
-      formattedDates.actual_departure_time,
-      formattedDates.actual_arrival_time,
-      req.params.id, 
-      req.user.id
-    ],
-    (err) => {
-      if (err) {
-        console.error('Error updating trip:', err);
-        return res.status(500).json({ error: `Error updating trip: ${err.message}` });
-      }
-      
-      db.get('SELECT * FROM trips WHERE id = ? AND user_id = ?', [req.params.id, req.user.id], (err, row) => {
-        if (err) {
-          console.error('Error fetching updated trip:', err);
-          return res.status(500).json({ error: `Error fetching updated trip: ${err.message}` });
-        }
-        if (!row) {
-          return res.status(404).json({ error: 'Trip not found' });
-        }
-        console.log('Trip updated successfully:', row);
-        res.json(row);
-      });
-    }
-  );
-});
-
-// Delete trip
-app.delete('/api/trips/:id', authenticateToken, (req, res) => {
-  const tripId = req.params.id;
-  
-  // First check if the trip belongs to the user and is scheduled
-  db.get(
-    'SELECT * FROM trips WHERE id = ? AND user_id = ? AND status = "scheduled"',
-    [tripId, req.user.id],
-    (err, trip) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      if (!trip) return res.status(404).json({ error: 'Trip not found or cannot be deleted' });
-
-      // Delete the trip
-      db.run(
-        'DELETE FROM trips WHERE id = ? AND user_id = ?',
-        [tripId, req.user.id],
-        (err) => {
-          if (err) return res.status(500).json({ error: 'Error deleting trip' });
-          res.json({ message: 'Trip deleted successfully' });
         }
       );
     }

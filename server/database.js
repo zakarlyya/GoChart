@@ -25,15 +25,42 @@ db.serialize(() => {
     range_nm FLOAT,
     cruise_speed_kts FLOAT,
     fuel_capacity_gal FLOAT,
+    num_engines INTEGER DEFAULT 2,
+    num_seats INTEGER DEFAULT 20,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
 
-  // Check if nickname column exists in planes table
+  // Check if num_engines and num_seats columns exist in planes table
   db.all("PRAGMA table_info(planes)", (err, rows) => {
     if (err) {
       console.error('Error checking planes table schema:', err);
       return;
+    }
+    
+    const hasNumEngines = rows.some(row => row.name === 'num_engines');
+    const hasNumSeats = rows.some(row => row.name === 'num_seats');
+    
+    if (!hasNumEngines) {
+      console.log('Adding num_engines column to planes table...');
+      db.run(`ALTER TABLE planes ADD COLUMN num_engines INTEGER DEFAULT 2`, (err) => {
+        if (err) {
+          console.error('Error adding num_engines column:', err);
+        } else {
+          console.log('Successfully added num_engines column to planes table');
+        }
+      });
+    }
+
+    if (!hasNumSeats) {
+      console.log('Adding num_seats column to planes table...');
+      db.run(`ALTER TABLE planes ADD COLUMN num_seats INTEGER DEFAULT 20`, (err) => {
+        if (err) {
+          console.error('Error adding num_seats column:', err);
+        } else {
+          console.log('Successfully added num_seats column to planes table');
+        }
+      });
     }
     
     // Check if nickname column exists in the returned rows

@@ -20,7 +20,13 @@ interface Plane {
   model: string;
   manufacturer: string;
   nickname?: string;
+  num_engines: number;
+  num_seats: number;
   isLocked?: boolean;
+  modelLocked?: boolean;
+  manufacturerLocked?: boolean;
+  enginesLocked?: boolean;
+  seatsLocked?: boolean;
 }
 
 interface Trip {
@@ -125,7 +131,9 @@ const PlaneDetailsModal = ({
     tail_number: plane.tail_number,
     model: plane.model,
     manufacturer: plane.manufacturer,
-    nickname: plane.nickname || ''
+    nickname: plane.nickname || '',
+    num_engines: plane.num_engines || 2,
+    num_seats: plane.num_seats || 20
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -315,8 +323,10 @@ const TripCard = ({
   
   return (
     <div 
-      className={`p-3 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-colors ${
-        isHovered ? 'ring-2 ring-blue-500' : ''
+      className={`p-3 rounded-lg cursor-pointer transition-all duration-200 mb-2 mx-1 ${
+        isHovered 
+          ? 'bg-gray-600 ring-2 ring-blue-500 shadow-lg scale-[1.02] z-10' 
+          : 'bg-gray-700 hover:bg-gray-600'
       }`}
       onClick={onClick}
       onMouseEnter={() => onHover(trip.id)}
@@ -1017,12 +1027,18 @@ const Dashboard = () => {
   const [isLoadingMap, setIsLoadingMap] = useState(true);
   const [error, setError] = useState('');
   const [isInitialized, setIsInitialized] = useState(false);
-  const [newPlane, setNewPlane] = useState({ 
+  const [newPlane, setNewPlane] = useState({
     tail_number: '',
     model: '',
     manufacturer: '',
     nickname: '',
-    isLocked: false
+    num_engines: 2,
+    num_seats: 20,
+    isLocked: false,
+    modelLocked: false,
+    manufacturerLocked: false,
+    enginesLocked: false,
+    seatsLocked: false
   });
   const [newTrip, setNewTrip] = useState({
     departure_airport: '',
@@ -1188,11 +1204,15 @@ const Dashboard = () => {
 
       // Remove existing layers and sources
       mapTrips.forEach(trip => {
-        if (map.current?.getLayer(trip.layerId)) {
-          map.current.removeLayer(trip.layerId);
-        }
-        if (map.current?.getSource(trip.sourceId)) {
-          map.current.removeSource(trip.sourceId);
+        try {
+          if (map.current?.getLayer(trip.layerId)) {
+            map.current.removeLayer(trip.layerId);
+          }
+          if (map.current?.getSource(trip.sourceId)) {
+            map.current.removeSource(trip.sourceId);
+          }
+        } catch (error) {
+          console.error(`Error removing layer/source for trip ${trip.id}:`, error);
         }
       });
 
@@ -1315,6 +1335,19 @@ const Dashboard = () => {
         try {
           console.log(`Adding route for trip ${trip.id}`);
           
+          // Check if source already exists and remove it
+          if (map.current?.getSource(trip.sourceId)) {
+            try {
+              if (map.current?.getLayer(trip.layerId)) {
+                map.current.removeLayer(trip.layerId);
+              }
+              map.current.removeSource(trip.sourceId);
+              console.log(`Removed existing source for trip ${trip.id}`);
+            } catch (error) {
+              console.error(`Error removing existing source for trip ${trip.id}:`, error);
+            }
+          }
+          
           // Add the route source
           map.current?.addSource(trip.sourceId, {
             type: 'geojson',
@@ -1322,7 +1355,8 @@ const Dashboard = () => {
               type: 'Feature',
               properties: {
                 tripId: trip.id,
-                status: trip.status
+                status: trip.status,
+                hover: hoveredTripId === trip.id
               },
               geometry: {
                 type: 'LineString',
@@ -1341,18 +1375,18 @@ const Dashboard = () => {
               'line-cap': 'round'
             },
             paint: {
-              'line-color': trip.status === 'scheduled' ? '#3b82f6' : '#10b981',
+              'line-color': trip.status === 'scheduled' ? '#3b82f6' : '#22c55e',
               'line-width': [
                 'case',
-                ['==', ['number', ['get', 'tripId']], hoveredTripId || -1],
-                5,
-                3
+                ['boolean', ['==', ['get', 'hover'], true], false],
+                8, // Width for hovered state
+                3  // Width for default state
               ],
               'line-opacity': [
                 'case',
-                ['==', ['number', ['get', 'tripId']], hoveredTripId || -1],
-                1,
-                0.7
+                ['boolean', ['==', ['get', 'hover'], true], false],
+                0.8, // Opacity for hovered state
+                0.6  // Opacity for default state
               ]
             }
           });
@@ -1393,21 +1427,13 @@ const Dashboard = () => {
     }
   };
 
-  // Add a useEffect to update the map when trips change
+  // Fix the duplicate useEffect calls
   useEffect(() => {
     if (mapLoaded && map.current && trips.length > 0) {
-      console.log('Trips changed, updating map trips');
+      console.log('Map loaded and trips available, updating map trips');
       updateMapTrips();
     }
-  }, [trips, mapLoaded]);
-
-  // Update the useEffect to call updateMapTrips when trips change
-  useEffect(() => {
-    if (map.current && isInitialized && trips.length > 0) {
-      console.log('Trips changed, updating map trips');
-      updateMapTrips();
-    }
-  }, [trips, isInitialized]);
+  }, [mapLoaded, trips.length]);
 
   // Update the useEffect for hoveredTripId
   useEffect(() => {
@@ -1422,7 +1448,8 @@ const Dashboard = () => {
             type: 'Feature',
             properties: {
               tripId: trip.id,
-              status: trip.status
+              status: trip.status,
+              hover: hoveredTripId === trip.id
             },
             geometry: {
               type: 'LineString',
@@ -1434,7 +1461,7 @@ const Dashboard = () => {
         console.error(`Error updating hover state for trip ${trip.id}:`, error);
       }
     });
-  }, [hoveredTripId]);
+  }, [hoveredTripId, mapTrips]);
 
   const fetchPlanes = async () => {
     try {
@@ -1515,7 +1542,7 @@ const Dashboard = () => {
       // Update the planes list with the new plane
       setPlanes([...planes, data]);
       setShowAddPlane(false);
-      setNewPlane({ tail_number: '', model: '', manufacturer: '', nickname: '', isLocked: false });
+      setNewPlane({ tail_number: '', model: '', manufacturer: '', nickname: '', num_engines: 2, num_seats: 20, isLocked: false, modelLocked: false, manufacturerLocked: false, enginesLocked: false, seatsLocked: false });
     } catch (error: any) {
       console.error('Error adding plane:', error);
       setError(error.response?.data?.error || 'Error adding plane');
@@ -1749,6 +1776,65 @@ const Dashboard = () => {
     };
   }, [isLoading]);
 
+  // Update the aircraft lookup in the Add Plane Modal section
+  const handleAircraftLookup = async () => {
+    try {
+      setError('');
+      if (!newPlane.tail_number) {
+        setError('Please enter a tail number');
+        return;
+      }
+      
+      const response = await axios.get(
+        `https://prod.api.market/api/v1/aedbx/aerodatabox/aircrafts/Reg/${newPlane.tail_number}`,
+        {
+          headers: {
+            'x-magicapi-key': 'cm7y3fnmy0008l103e19tu2sg'
+          }
+        }
+      );
+      
+      if (response.data) {
+        // Split productionLine into manufacturer and model
+        const productionLine = response.data.productionLine || '';
+        const [manufacturer, ...modelParts] = productionLine.split(' ');
+        const model = modelParts.join(' ') || response.data.modelCode || response.data.model || '';
+
+        // Only lock the fields if we actually get values from the API
+        const hasEngines = typeof response.data.numEngines === 'number';
+        const hasSeats = typeof response.data.numSeats === 'number';
+        const hasManufacturer = manufacturer && manufacturer.trim() !== '';
+        const hasModel = model && model.trim() !== '';
+
+        setNewPlane(prev => ({
+          ...prev,
+          model: hasModel ? model : prev.model,
+          manufacturer: hasManufacturer ? manufacturer : prev.manufacturer,
+          num_engines: hasEngines ? response.data.numEngines : prev.num_engines,
+          num_seats: hasSeats ? response.data.numSeats : prev.num_seats,
+          isLocked: false, // Don't lock the entire form
+          modelLocked: hasModel, // Only lock model if we have a value
+          manufacturerLocked: hasManufacturer, // Only lock manufacturer if we have a value
+          enginesLocked: hasEngines,
+          seatsLocked: hasSeats
+        }));
+      } else {
+        setError('No aircraft data found for this tail number');
+      }
+    } catch (error) {
+      console.error('Error looking up aircraft:', error);
+      setError('Error looking up aircraft. Please try again.');
+      setNewPlane(prev => ({
+        ...prev,
+        isLocked: false,
+        modelLocked: false,
+        manufacturerLocked: false,
+        enginesLocked: false,
+        seatsLocked: false
+      }));
+    }
+  };
+
   if (isLoading) {
     return <Loading message="Loading Data..." />;
   }
@@ -1911,6 +1997,11 @@ const Dashboard = () => {
         <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center p-4">
           <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
             <h3 className="text-xl font-bold mb-4 text-white">Add New Plane</h3>
+            {error && (
+              <div className="mb-4 p-3 bg-red-900/50 border-l-4 border-red-500 text-red-200">
+                {error}
+              </div>
+            )}
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -1925,42 +2016,7 @@ const Dashboard = () => {
                     onChange={e => setNewPlane({ ...newPlane, tail_number: e.target.value.toUpperCase() })}
                   />
                   <button
-                    onClick={async () => {
-                      try {
-                        setError('');
-                        if (!newPlane.tail_number) {
-                          setError('Please enter a tail number');
-                          return;
-                        }
-                        
-                        const response = await axios.get(
-                          `https://prod.api.market/api/v1/aedbx/aerodatabox/aircrafts/Reg/${newPlane.tail_number}`,
-                          {
-                            headers: {
-                              'x-magicapi-key': 'cm7y3fnmy0008l103e19tu2sg'
-                            }
-                          }
-                        );
-                        
-                        if (response.data) {
-                          // Split productionLine into manufacturer and model
-                          const productionLine = response.data.productionLine || '';
-                          const [manufacturer, ...modelParts] = productionLine.split(' ');
-                          const model = modelParts.join(' ') || response.data.modelCode || response.data.model || '';
-
-                          setNewPlane(prev => ({
-                            ...prev,
-                            model,
-                            manufacturer,
-                            isLocked: true
-                          }));
-                        }
-                      } catch (error) {
-                        console.error('Error fetching aircraft data:', error);
-                        setNewPlane(prev => ({ ...prev, isLocked: false }));
-                        setError('Aircraft not found. Please enter details manually.');
-                      }
-                    }}
+                    onClick={handleAircraftLookup}
                     className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
                   >
                     Lookup
@@ -1974,10 +2030,10 @@ const Dashboard = () => {
                 <input
                   type="text"
                   placeholder="Citation CJ4"
-                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.isLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
+                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.modelLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
                   value={newPlane.model}
                   onChange={e => setNewPlane({ ...newPlane, model: e.target.value })}
-                  disabled={newPlane.isLocked}
+                  disabled={newPlane.modelLocked}
                 />
               </div>
               <div>
@@ -1987,11 +2043,41 @@ const Dashboard = () => {
                 <input
                   type="text"
                   placeholder="Cessna"
-                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.isLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
+                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.manufacturerLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
                   value={newPlane.manufacturer}
                   onChange={e => setNewPlane({ ...newPlane, manufacturer: e.target.value })}
-                  disabled={newPlane.isLocked}
+                  disabled={newPlane.manufacturerLocked}
                 />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Number of Engines
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="8"
+                    className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${newPlane.enginesLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
+                    value={newPlane.num_engines}
+                    onChange={e => setNewPlane({ ...newPlane, num_engines: parseInt(e.target.value) || 2 })}
+                    disabled={newPlane.enginesLocked}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1">
+                    Number of Seats
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="500"
+                    className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 ${newPlane.seatsLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
+                    value={newPlane.num_seats}
+                    onChange={e => setNewPlane({ ...newPlane, num_seats: parseInt(e.target.value) || 20 })}
+                    disabled={newPlane.seatsLocked}
+                  />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -2014,9 +2100,14 @@ const Dashboard = () => {
                     model: '',
                     manufacturer: '',
                     nickname: '',
-                    isLocked: false
+                    num_engines: 2,
+                    num_seats: 20,
+                    isLocked: false,
+                    enginesLocked: false,
+                    seatsLocked: false
                   });
                   setShowAddPlane(false);
+                  setError(''); // Clear error when closing
                 }}
                 className="px-4 py-2 text-gray-300 hover:text-white"
               >
