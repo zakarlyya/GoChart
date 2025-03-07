@@ -20,7 +20,7 @@ A web application for Part 135 charter operators to manage their fleet and plan 
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/gochart.git
+git clone https://github.com/zakarlyya/gochart.git
 cd gochart
 ```
 
@@ -52,7 +52,10 @@ The application will be available at:
 - Backend: Express.js
 - Database: SQLite
 - Map: MapBox GL JS
-- Styling: Tailwind CSS with ShadcN UI components
+- Styling: Tailwind CSS
+
+APIs used:
+- AeroDataBox API
 
 ## API Endpoints
 

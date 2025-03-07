@@ -19,6 +19,8 @@ interface Plane {
   tail_number: string;
   model: string;
   manufacturer: string;
+  nickname?: string;
+  isLocked?: boolean;
 }
 
 interface Trip {
@@ -45,6 +47,14 @@ interface Pilot {
   email?: string;
 }
 
+interface Airport {
+  icao: string;
+  name: string;
+  city: string;
+  country: string;
+  coordinates: [number, number];
+}
+
 // Add token debugging
 console.log('Mapbox token status:', {
   tokenExists: !!import.meta.env.VITE_MAPBOX_TOKEN,
@@ -52,6 +62,26 @@ console.log('Mapbox token status:', {
 });
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
+
+// Add this function near the top of the file, after imports
+const getWebGLErrorMessage = () => {
+  const canvas = document.createElement('canvas');
+  let message = 'WebGL is not available.';
+  
+  try {
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl) {
+      message = 'Your browser supports WebGL but it could not be initialized.';
+      if (window.WebGLRenderingContext) {
+        message += ' This might be due to your graphics card or its drivers.';
+      }
+    }
+  } catch (e) {
+    message = 'Your browser or device does not support WebGL.';
+  }
+  
+  return message;
+};
 
 // Loading component
 const Loading = ({ message }: { message: string }) => (
@@ -64,17 +94,19 @@ const Loading = ({ message }: { message: string }) => (
 );
 
 // Updated Plane Card component
-const PlaneCard = ({ plane, onClick }: { plane: Plane; onClick: () => void }) => (
-  <div 
-    className="p-3 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-colors"
-    onClick={onClick}
-  >
-    <p className="font-medium text-white">{plane.tail_number}</p>
-    <p className="text-sm text-gray-300">
-      {plane.manufacturer} {plane.model}
-    </p>
-  </div>
-);
+const PlaneCard = ({ plane, onClick }: { plane: Plane; onClick: () => void }) => {
+  const displayName = plane.nickname || `${plane.manufacturer} ${plane.model}`;
+  
+  return (
+    <div 
+      className="p-3 bg-gray-700 rounded-md hover:bg-gray-600 cursor-pointer transition-colors"
+      onClick={onClick}
+    >
+      <p className="font-medium text-white">{plane.tail_number}</p>
+      <p className="text-sm text-gray-300">{displayName}</p>
+    </div>
+  );
+};
 
 // Plane Details Modal component
 const PlaneDetailsModal = ({ 
@@ -91,7 +123,8 @@ const PlaneDetailsModal = ({
   const [form, setForm] = useState({
     tail_number: plane.tail_number,
     model: plane.model,
-    manufacturer: plane.manufacturer
+    manufacturer: plane.manufacturer,
+    nickname: plane.nickname || ''
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -143,6 +176,16 @@ const PlaneDetailsModal = ({
               onChange={e => setForm({ ...form, manufacturer: e.target.value })}
               className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
               required
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-300">Nickname (Optional)</label>
+            <input
+              type="text"
+              value={form.nickname}
+              onChange={e => setForm({ ...form, nickname: e.target.value })}
+              placeholder="Enter a nickname for this plane"
+              className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
             />
           </div>
 
@@ -312,6 +355,7 @@ const TripDetailsModal = ({
   const [form, setForm] = useState({
     status: trip.status,
     pilot_id: trip.pilot_id || '',
+    plane_id: trip.plane_id,
     departure_time: trip.departure_time?.slice(0, 16) || '',
     estimated_arrival_time: trip.estimated_arrival_time?.slice(0, 16) || '',
     actual_departure_time: trip.actual_departure_time?.slice(0, 16) || '',
@@ -320,12 +364,14 @@ const TripDetailsModal = ({
 
   const plane = planes.find(p => p.id === trip.plane_id);
   const canDelete = trip.status === 'scheduled';
+  const canChangeAircraft = trip.status === 'scheduled';
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onUpdate({
       ...form,
-      pilot_id: form.pilot_id ? Number(form.pilot_id) : null
+      pilot_id: form.pilot_id ? Number(form.pilot_id) : null,
+      plane_id: Number(form.plane_id)
     });
   };
 
@@ -356,7 +402,21 @@ const TripDetailsModal = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-sm font-medium text-gray-300">Aircraft</label>
-              <p className="text-white text-sm">{plane?.tail_number}</p>
+              {canChangeAircraft ? (
+                <select
+                  value={form.plane_id}
+                  onChange={e => setForm({ ...form, plane_id: Number(e.target.value) })}
+                  className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
+                >
+                  {planes.map(plane => (
+                    <option key={plane.id} value={plane.id}>
+                      {plane.tail_number} - {plane.nickname || `${plane.manufacturer} ${plane.model}`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-white text-sm">{plane?.tail_number} - {plane?.nickname || `${plane?.manufacturer} ${plane?.model}`}</p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-300">Route</label>
@@ -394,28 +454,26 @@ const TripDetailsModal = ({
             </div>
           </div>
 
-          {form.status === 'scheduled' && (
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-300">Scheduled Departure</label>
-                <input
-                  type="datetime-local"
-                  value={form.departure_time}
-                  onChange={e => setForm({ ...form, departure_time: e.target.value })}
-                  className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-300">Est. Arrival</label>
-                <input
-                  type="datetime-local"
-                  value={form.estimated_arrival_time}
-                  onChange={e => setForm({ ...form, estimated_arrival_time: e.target.value })}
-                  className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
-                />
-              </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-300">Scheduled Departure</label>
+              <input
+                type="datetime-local"
+                value={form.departure_time}
+                onChange={e => setForm({ ...form, departure_time: e.target.value })}
+                className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
+              />
             </div>
-          )}
+            <div>
+              <label className="block text-sm font-medium text-gray-300">Est. Arrival</label>
+              <input
+                type="datetime-local"
+                value={form.estimated_arrival_time}
+                onChange={e => setForm({ ...form, estimated_arrival_time: e.target.value })}
+                className="mt-1 w-full p-1.5 bg-gray-700 border border-gray-600 text-white rounded-md text-sm"
+              />
+            </div>
+          </div>
 
           {(form.status === 'departed' || form.status === 'arrived') && (
             <div className="grid grid-cols-2 gap-3">
@@ -804,6 +862,88 @@ const EditPilotModal = ({
   );
 };
 
+const AirportInput = ({
+  value,
+  onChange,
+  placeholder,
+  label
+}: {
+  value: string;
+  onChange: (value: string, airport?: Airport) => void;
+  placeholder: string;
+  label: string;
+}) => {
+  const [suggestions, setSuggestions] = useState<Airport[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  useEffect(() => {
+    const fetchSuggestions = async () => {
+      if (!value || value.length < 2) {
+        setSuggestions([]);
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        const { data } = await axios.get(`/api/airports/search?query=${encodeURIComponent(value)}`);
+        setSuggestions(data);
+      } catch (error) {
+        console.error('Error fetching airport suggestions:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    const timeoutId = setTimeout(fetchSuggestions, 300);
+    return () => clearTimeout(timeoutId);
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <label className="block text-sm font-medium text-gray-300 mb-1">
+        {label}
+      </label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setShowSuggestions(true);
+        }}
+        onFocus={() => setShowSuggestions(true)}
+        placeholder={placeholder}
+        className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+      />
+      {showSuggestions && (value.length >= 2) && (
+        <div className="absolute z-50 w-full mt-1 bg-gray-700 border border-gray-600 rounded-md shadow-lg max-h-60 overflow-y-auto">
+          {isLoading ? (
+            <div className="p-2 text-gray-400 text-sm">Loading...</div>
+          ) : suggestions.length > 0 ? (
+            <ul>
+              {suggestions.map((airport) => (
+                <li
+                  key={airport.icao}
+                  onClick={() => {
+                    onChange(airport.icao, airport);
+                    setShowSuggestions(false);
+                  }}
+                  className="p-2 hover:bg-gray-600 cursor-pointer text-white text-sm"
+                >
+                  <div className="font-medium">{airport.icao} - {airport.name}</div>
+                  <div className="text-gray-400 text-xs">{airport.city}, {airport.country}</div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="p-2 text-gray-400 text-sm">No airports found</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const mapContainer = useRef<HTMLDivElement>(null);
@@ -819,7 +959,9 @@ const Dashboard = () => {
   const [newPlane, setNewPlane] = useState({ 
     tail_number: '',
     model: '',
-    manufacturer: ''
+    manufacturer: '',
+    nickname: '',
+    isLocked: false
   });
   const [newTrip, setNewTrip] = useState({
     departure_airport: '',
@@ -847,6 +989,7 @@ const Dashboard = () => {
     contact_number: '',
     email: ''
   });
+  const [hasWebGLSupport, setHasWebGLSupport] = useState(true);
 
   // Check for token before any data fetching
   useEffect(() => {
@@ -887,7 +1030,7 @@ const Dashboard = () => {
     fetchData();
   }, [navigate]);
 
-  // Initialize map after data is loaded
+  // Update the map initialization useEffect
   useEffect(() => {
     if (!mapContainer.current || map.current || isLoading) {
       return;
@@ -901,12 +1044,25 @@ const Dashboard = () => {
           throw new Error('Mapbox token is not set in environment variables');
         }
 
+        // Check for WebGL support before initializing the map
+        const canvas = document.createElement('canvas');
+        const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+        
+        if (!gl) {
+          setHasWebGLSupport(false);
+          setError(getWebGLErrorMessage());
+          setIsLoadingMap(false);
+          return;
+        }
+
         mapboxgl.accessToken = MAPBOX_TOKEN;
         const mapInstance = new mapboxgl.Map({
           container: mapContainer.current!,
           style: 'mapbox://styles/mapbox/dark-v11',
           center: [-98.5795, 39.8283],
-          zoom: 3
+          zoom: 3,
+          failIfMajorPerformanceCaveat: true,
+          antialias: true // Enable antialiasing for better rendering
         });
 
         map.current = mapInstance;
@@ -928,6 +1084,7 @@ const Dashboard = () => {
         console.error('Error initializing map:', error);
         setError(error instanceof Error ? error.message : 'Error initializing map');
         setIsLoadingMap(false);
+        setHasWebGLSupport(false);
       }
     };
 
@@ -939,7 +1096,7 @@ const Dashboard = () => {
         map.current = null;
       }
     };
-  }, [isLoading]); // Only depend on isLoading state
+  }, [isLoading]);
 
   const fetchPlanes = async () => {
     try {
@@ -1003,19 +1160,27 @@ const Dashboard = () => {
 
   const handleAddPlane = async () => {
     try {
-      await axios.post(
+      setError(''); // Clear any existing errors
+      if (!newPlane.tail_number || !newPlane.model || !newPlane.manufacturer) {
+        setError('Tail number, model, and manufacturer are required');
+        return;
+      }
+
+      const { data } = await axios.post(
         '/api/planes',
         newPlane,
         {
           headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
         }
       );
+      
+      // Update the planes list with the new plane
+      setPlanes([...planes, data]);
       setShowAddPlane(false);
-      setNewPlane({ tail_number: '', model: '', manufacturer: '' });
-      fetchPlanes();
+      setNewPlane({ tail_number: '', model: '', manufacturer: '', nickname: '', isLocked: false });
     } catch (error: any) {
       console.error('Error adding plane:', error);
-      alert(error.response?.data?.error || 'Error adding plane');
+      setError(error.response?.data?.error || 'Error adding plane');
     }
   };
 
@@ -1048,15 +1213,21 @@ const Dashboard = () => {
     localStorage.removeItem('token');
     delete axios.defaults.headers.common['Authorization'];
     
-    // Navigate to login page
-    navigate('/', { replace: true });
+    // Navigate to login page without using the navigate hook
+    window.location.href = '/';
   };
 
   const handleUpdatePlane = async (updatedPlane: Partial<Plane>) => {
     try {
       if (!selectedPlane) return;
       
-      await axios.put(
+      setError(''); // Clear any existing errors
+      if (!updatedPlane.tail_number || !updatedPlane.model || !updatedPlane.manufacturer) {
+        setError('Tail number, model, and manufacturer are required');
+        return;
+      }
+
+      const { data } = await axios.put(
         `/api/planes/${selectedPlane.id}`,
         updatedPlane,
         {
@@ -1064,17 +1235,31 @@ const Dashboard = () => {
         }
       );
       
+      // Update the planes list with the updated plane
+      setPlanes(planes.map(p => p.id === selectedPlane.id ? data : p));
       setSelectedPlane(null);
-      fetchPlanes();
+      setError(''); // Clear any existing errors
     } catch (error: any) {
       console.error('Error updating plane:', error);
       setError(error.response?.data?.error || 'Error updating plane');
+      // Don't close the modal on error so user can try again
     }
   };
 
   const handleDeletePlane = async () => {
     try {
       if (!selectedPlane) return;
+      
+      // Check if the plane is on any departed or arrived trips
+      const activeTrips = trips.filter(trip => 
+        trip.plane_id === selectedPlane.id && 
+        (trip.status === 'departed' || trip.status === 'arrived')
+      );
+
+      if (activeTrips.length > 0) {
+        setError('Cannot delete plane as it is assigned to trips that have already departed or arrived');
+        return;
+      }
       
       await axios.delete(
         `/api/planes/${selectedPlane.id}`,
@@ -1201,16 +1386,6 @@ const Dashboard = () => {
     return <Loading message="Loading Data..." />;
   }
 
-  // Add a loading overlay for map initialization
-  const LoadingOverlay = () => (
-    <div className="absolute inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-10">
-      <div className="text-center">
-        <h2 className="text-xl font-semibold text-gray-200">Initializing Map...</h2>
-        <p className="text-gray-400 mt-2">Please wait while we set up your dashboard</p>
-      </div>
-    </div>
-  );
-
   return (
     <div className="h-screen flex flex-col bg-gray-900">
       {/* Header */}
@@ -1228,8 +1403,38 @@ const Dashboard = () => {
 
       <div className="flex-1 flex overflow-hidden relative">
         {/* Map */}
-        <div ref={mapContainer} className="flex-1 relative">
-          {isLoadingMap && <LoadingOverlay />}
+        <div className="flex-1 relative">
+          {!hasWebGLSupport ? (
+            <div className="absolute inset-0 bg-gray-800 flex items-center justify-center p-4">
+              <div className="text-center max-w-md">
+                <h2 className="text-xl font-semibold text-white mb-2">Map Not Available</h2>
+                <p className="text-gray-300 mb-4">
+                  {error || getWebGLErrorMessage()}
+                </p>
+                <div className="text-sm text-gray-400">
+                  <p className="mb-2">To fix this issue, try:</p>
+                  <ul className="list-disc list-inside">
+                    <li>Enabling hardware acceleration in your browser</li>
+                    <li>Updating your graphics drivers</li>
+                    <li>Using a modern browser like Chrome or Firefox</li>
+                    <li>Disabling any browser extensions that might interfere with WebGL</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div ref={mapContainer} className="absolute inset-0" />
+              {isLoadingMap && (
+                <div className="absolute inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-10">
+                  <div className="text-center">
+                    <h2 className="text-xl font-semibold text-gray-200">Initializing Map...</h2>
+                    <p className="text-gray-400 mt-2">Please wait while we set up your dashboard</p>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {/* Side Panel */}
@@ -1355,13 +1560,56 @@ const Dashboard = () => {
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Tail Number
                 </label>
-                <input
-                  type="text"
-                  placeholder="N12345"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
-                  value={newPlane.tail_number}
-                  onChange={e => setNewPlane({ ...newPlane, tail_number: e.target.value })}
-                />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="N12345"
+                    className="flex-1 p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                    value={newPlane.tail_number}
+                    onChange={e => setNewPlane({ ...newPlane, tail_number: e.target.value.toUpperCase() })}
+                  />
+                  <button
+                    onClick={async () => {
+                      try {
+                        setError('');
+                        if (!newPlane.tail_number) {
+                          setError('Please enter a tail number');
+                          return;
+                        }
+                        
+                        const response = await axios.get(
+                          `https://prod.api.market/api/v1/aedbx/aerodatabox/aircrafts/Reg/${newPlane.tail_number}`,
+                          {
+                            headers: {
+                              'x-magicapi-key': 'cm7y3fnmy0008l103e19tu2sg'
+                            }
+                          }
+                        );
+                        
+                        if (response.data) {
+                          // Split productionLine into manufacturer and model
+                          const productionLine = response.data.productionLine || '';
+                          const [manufacturer, ...modelParts] = productionLine.split(' ');
+                          const model = modelParts.join(' ') || response.data.modelCode || response.data.model || '';
+
+                          setNewPlane(prev => ({
+                            ...prev,
+                            model,
+                            manufacturer,
+                            isLocked: true
+                          }));
+                        }
+                      } catch (error) {
+                        console.error('Error fetching aircraft data:', error);
+                        setNewPlane(prev => ({ ...prev, isLocked: false }));
+                        setError('Aircraft not found. Please enter details manually.');
+                      }
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+                  >
+                    Lookup
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
@@ -1370,9 +1618,10 @@ const Dashboard = () => {
                 <input
                   type="text"
                   placeholder="Citation CJ4"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.isLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
                   value={newPlane.model}
                   onChange={e => setNewPlane({ ...newPlane, model: e.target.value })}
+                  disabled={newPlane.isLocked}
                 />
               </div>
               <div>
@@ -1382,15 +1631,37 @@ const Dashboard = () => {
                 <input
                   type="text"
                   placeholder="Cessna"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                  className={`w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 ${newPlane.isLocked ? 'opacity-75 cursor-not-allowed' : ''}`}
                   value={newPlane.manufacturer}
                   onChange={e => setNewPlane({ ...newPlane, manufacturer: e.target.value })}
+                  disabled={newPlane.isLocked}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1">
+                  Nickname (Optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="Enter a nickname"
+                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                  value={newPlane.nickname}
+                  onChange={e => setNewPlane({ ...newPlane, nickname: e.target.value })}
                 />
               </div>
             </div>
             <div className="flex justify-end space-x-2 mt-6">
               <button
-                onClick={() => setShowAddPlane(false)}
+                onClick={() => {
+                  setNewPlane({ 
+                    tail_number: '',
+                    model: '',
+                    manufacturer: '',
+                    nickname: '',
+                    isLocked: false
+                  });
+                  setShowAddPlane(false);
+                }}
                 className="px-4 py-2 text-gray-300 hover:text-white"
               >
                 Cancel
@@ -1412,30 +1683,18 @@ const Dashboard = () => {
           <div className="bg-gray-800 p-6 rounded-lg w-full max-w-md">
             <h3 className="text-xl font-bold mb-4 text-white">Add New Trip</h3>
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Departure Airport (ICAO)
-                </label>
-                <input
-                  type="text"
-                  placeholder="KJFK"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
-                  value={newTrip.departure_airport}
-                  onChange={e => setNewTrip({ ...newTrip, departure_airport: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1">
-                  Arrival Airport (ICAO)
-                </label>
-                <input
-                  type="text"
-                  placeholder="KLAX"
-                  className="w-full p-2 bg-gray-700 border border-gray-600 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
-                  value={newTrip.arrival_airport}
-                  onChange={e => setNewTrip({ ...newTrip, arrival_airport: e.target.value })}
-                />
-              </div>
+              <AirportInput
+                value={newTrip.departure_airport}
+                onChange={(value) => setNewTrip({ ...newTrip, departure_airport: value })}
+                placeholder="KJFK"
+                label="Departure Airport (ICAO)"
+              />
+              <AirportInput
+                value={newTrip.arrival_airport}
+                onChange={(value) => setNewTrip({ ...newTrip, arrival_airport: value })}
+                placeholder="KLAX"
+                label="Arrival Airport (ICAO)"
+              />
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-1">
                   Aircraft
@@ -1448,7 +1707,7 @@ const Dashboard = () => {
                   <option value="" className="text-gray-400">Select Aircraft</option>
                   {planes.map(plane => (
                     <option key={plane.id} value={plane.id}>
-                      {plane.tail_number} - {plane.model}
+                      {plane.tail_number} - {plane.nickname || `${plane.manufacturer} ${plane.model}`}
                     </option>
                   ))}
                 </select>

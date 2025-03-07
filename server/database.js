@@ -21,12 +21,35 @@ db.serialize(() => {
     tail_number TEXT UNIQUE NOT NULL,
     model TEXT NOT NULL,
     manufacturer TEXT,
+    nickname TEXT,
     range_nm FLOAT,
     cruise_speed_kts FLOAT,
     fuel_capacity_gal FLOAT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(user_id) REFERENCES users(id)
   )`);
+
+  // Check if nickname column exists in planes table
+  db.all("PRAGMA table_info(planes)", (err, rows) => {
+    if (err) {
+      console.error('Error checking planes table schema:', err);
+      return;
+    }
+    
+    // Check if nickname column exists in the returned rows
+    const hasNickname = rows.some(row => row.name === 'nickname');
+    
+    if (!hasNickname) {
+      console.log('Adding nickname column to planes table...');
+      db.run(`ALTER TABLE planes ADD COLUMN nickname TEXT`, (err) => {
+        if (err) {
+          console.error('Error adding nickname column:', err);
+        } else {
+          console.log('Successfully added nickname column to planes table');
+        }
+      });
+    }
+  });
 
   // Pilots table
   db.run(`CREATE TABLE IF NOT EXISTS pilots (

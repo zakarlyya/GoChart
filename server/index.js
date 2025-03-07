@@ -4,9 +4,51 @@ const cors = require('cors');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const db = require('./database');
+const fs = require('fs');
+const path = require('path');
+const csv = require('csv-parse');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Store airports in memory for quick access
+let airports = [];
+
+// Load airports data
+const loadAirports = () => {
+  const airportsFile = path.join(__dirname, '..', 'data', 'airports.csv');
+  
+  if (!fs.existsSync(airportsFile)) {
+    console.error('Airports data file not found:', airportsFile);
+    return;
+  }
+
+  const parser = csv.parse({ columns: true, skip_empty_lines: true });
+  const fileStream = fs.createReadStream(airportsFile);
+
+  fileStream.pipe(parser)
+    .on('data', (row) => {
+      airports.push({
+        icao: row.icao,
+        iata: row.iata,
+        name: row.name,
+        city: row.city,
+        country: row.country,
+        lat: parseFloat(row.lat),
+        lon: parseFloat(row.lon),
+        elevation: parseInt(row.elevation_ft, 10)
+      });
+    })
+    .on('end', () => {
+      console.log(`Loaded ${airports.length} airports`);
+    })
+    .on('error', (err) => {
+      console.error('Error loading airports:', err);
+    });
+};
+
+// Load airports on startup
+loadAirports();
 
 // Middleware
 app.use(cors());
@@ -125,22 +167,37 @@ app.get('/api/planes', authenticateToken, (req, res) => {
 });
 
 app.post('/api/planes', authenticateToken, (req, res) => {
-  const { tail_number, model, manufacturer, range_nm, cruise_speed_kts, fuel_capacity_gal } = req.body;
+  console.log('Adding new plane:', req.body);
+  const { tail_number, model, manufacturer, nickname, range_nm, cruise_speed_kts, fuel_capacity_gal } = req.body;
   
+  if (!tail_number || !model || !manufacturer) {
+    console.error('Missing required fields');
+    return res.status(400).json({ error: 'Tail number, model, and manufacturer are required' });
+  }
+
   db.run(
     `INSERT INTO planes (
-      user_id, tail_number, model, manufacturer, 
+      user_id, tail_number, model, manufacturer, nickname,
       range_nm, cruise_speed_kts, fuel_capacity_gal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [req.user.id, tail_number, model, manufacturer, range_nm, cruise_speed_kts, fuel_capacity_gal],
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [req.user.id, tail_number, model, manufacturer, nickname || null, range_nm || null, cruise_speed_kts || null, fuel_capacity_gal || null],
     function(err) {
       if (err) {
+        console.error('Error adding plane:', err);
         if (err.message.includes('UNIQUE constraint failed')) {
           return res.status(400).json({ error: 'Tail number already exists' });
         }
-        return res.status(500).json({ error: 'Error adding plane' });
+        return res.status(500).json({ error: 'Error adding plane: ' + err.message });
       }
-      res.json({ id: this.lastID, tail_number });
+
+      // Fetch and return the newly created plane
+      db.get('SELECT * FROM planes WHERE id = ?', [this.lastID], (err, plane) => {
+        if (err) {
+          console.error('Error fetching new plane:', err);
+          return res.status(500).json({ error: 'Error fetching new plane' });
+        }
+        res.status(201).json(plane);
+      });
     }
   );
 });
@@ -234,31 +291,63 @@ app.post('/api/trips', authenticateToken, (req, res) => {
 
 // Update plane
 app.put('/api/planes/:id', authenticateToken, (req, res) => {
-  const { tail_number, model, manufacturer } = req.body;
+  const { tail_number, model, manufacturer, nickname } = req.body;
   const planeId = req.params.id;
+
+  console.log('Updating plane:', {
+    planeId,
+    updates: { tail_number, model, manufacturer, nickname }
+  });
+
+  if (!tail_number || !model || !manufacturer) {
+    console.error('Missing required fields');
+    return res.status(400).json({ error: 'Tail number, model, and manufacturer are required' });
+  }
 
   // First check if the plane belongs to the user
   db.get(
     'SELECT * FROM planes WHERE id = ? AND user_id = ?',
     [planeId, req.user.id],
     (err, plane) => {
-      if (err) return res.status(500).json({ error: 'Database error' });
-      if (!plane) return res.status(404).json({ error: 'Plane not found' });
+      if (err) {
+        console.error('Database error checking plane:', err);
+        return res.status(500).json({ error: 'Database error: ' + err.message });
+      }
+      if (!plane) {
+        console.error('Plane not found:', { planeId, userId: req.user.id });
+        return res.status(404).json({ error: 'Plane not found' });
+      }
 
       // Update the plane
       db.run(
         `UPDATE planes 
-         SET tail_number = ?, model = ?, manufacturer = ?
+         SET tail_number = ?, model = ?, manufacturer = ?, nickname = ?
          WHERE id = ? AND user_id = ?`,
-        [tail_number, model, manufacturer, planeId, req.user.id],
-        (err) => {
+        [tail_number, model, manufacturer, nickname || null, planeId, req.user.id],
+        function(err) {
           if (err) {
+            console.error('Error updating plane:', err);
             if (err.message.includes('UNIQUE constraint failed')) {
               return res.status(400).json({ error: 'Tail number already exists' });
             }
-            return res.status(500).json({ error: 'Error updating plane' });
+            return res.status(500).json({ error: 'Error updating plane: ' + err.message });
           }
-          res.json({ message: 'Plane updated successfully' });
+
+          // Fetch and return the updated plane
+          db.get(
+            'SELECT * FROM planes WHERE id = ?',
+            [planeId],
+            (err, updatedPlane) => {
+              if (err) {
+                console.error('Error fetching updated plane:', err);
+                return res.status(500).json({ error: 'Error fetching updated plane: ' + err.message });
+              }
+              if (!updatedPlane) {
+                return res.status(404).json({ error: 'Updated plane not found' });
+              }
+              res.json(updatedPlane);
+            }
+          );
         }
       );
     }
@@ -345,12 +434,13 @@ app.put('/api/trips/:id', authenticateToken, (req, res) => {
 
   db.run(
     `UPDATE trips 
-     SET status = ?, pilot_id = ?, departure_time = ?, estimated_arrival_time = ?,
+     SET status = ?, pilot_id = ?, plane_id = ?, departure_time = ?, estimated_arrival_time = ?,
          actual_departure_time = ?, actual_arrival_time = ?
      WHERE id = ? AND user_id = ?`,
     [
       status, 
       parsedPilotId,
+      req.body.plane_id,
       formattedDates.departure_time,
       formattedDates.estimated_arrival_time,
       formattedDates.actual_departure_time,
@@ -494,6 +584,33 @@ app.delete('/api/pilots/:id', authenticateToken, (req, res) => {
       res.status(204).send();
     }
   );
+});
+
+// Airport search endpoint
+app.get('/api/airports/search', authenticateToken, (req, res) => {
+  const { query } = req.query;
+  if (!query || query.length < 2) {
+    return res.json([]);
+  }
+
+  const searchTerm = query.toLowerCase();
+  const results = airports
+    .filter(airport => 
+      airport.icao.toLowerCase().includes(searchTerm) ||
+      airport.name.toLowerCase().includes(searchTerm) ||
+      (airport.iata && airport.iata.toLowerCase().includes(searchTerm)) ||
+      airport.city.toLowerCase().includes(searchTerm)
+    )
+    .slice(0, 10) // Limit to 10 results
+    .map(airport => ({
+      icao: airport.icao,
+      name: airport.name,
+      city: airport.city,
+      country: airport.country,
+      coordinates: [airport.lon, airport.lat]
+    }));
+
+  res.json(results);
 });
 
 app.listen(PORT, () => {
